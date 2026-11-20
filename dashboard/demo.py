@@ -192,11 +192,13 @@ def make_cert(ip: str) -> tuple[str, str]:
     return str(key), str(crt)
 
 
-def serve(port: int, host: str, lan: bool, lan_port: int) -> None:
+def serve(port: int, host: str, lan: bool, lan_port: int, buttons: bool = False) -> None:
     import asyncio
     import socket
 
     import uvicorn
+    if buttons:
+        os.environ["TANOD_DEMO"] = "1"  # shows the Demo controls (Hijack, Scan, Reset, QR code)
     for h, p in [(host, port)] + ([("0.0.0.0", lan_port)] if lan else []):
         with socket.socket() as sk:
             if sk.connect_ex(("127.0.0.1", p)) == 0:
@@ -204,7 +206,6 @@ def serve(port: int, host: str, lan: bool, lan_port: int) -> None:
                                  f"Stop it with Ctrl+C in its terminal (or: kill $(lsof -tiTCP:{p} -sTCP:LISTEN)), "
                                  "then run this again.")
     configs = [uvicorn.Config("dashboard.app:app", host=host, port=port, log_level="warning")]
-    os.environ["TANOD_DEMO"] = "1"  # shows the demo buttons on the dashboard
     if lan:
         os.environ["TANOD_PHONE_CAMERA"] = "1"  # every camera is a phone; never fall back to the laptop camera
         ip = lan_ip()
@@ -230,6 +231,8 @@ def main(argv=None):
     ap.add_argument("--lan", action="store_true",
                     help="also serve HTTPS on the Wi-Fi so a phone can be the camera (open /cam on it)")
     ap.add_argument("--lan-port", type=int, default=8443)
+    ap.add_argument("--buttons", action="store_true",
+                    help="show Demo controls on the dashboard (Hijack, Outside scan, Reset, QR code for the phone)")
     ap.add_argument("--cameras", type=int, default=None, help="how many cameras the demo has (1 to 9)")
     ap.add_argument("--camera", type=int, default=1, help="which camera --attack targets (1 = the first)")
     ap.add_argument("--attack", choices=sorted(ATTACKS), help="run a camera scenario against the running demo")
@@ -257,7 +260,7 @@ def main(argv=None):
                         else "phone page (--lan) or a camera on this laptop"))
     print("Telegram: " + ("on" if telegram.configured() else "off (fill in .env to turn it on)"))
     print(f"Dashboard on this Mac: http://localhost:{args.port}  (Ctrl+C to stop)")
-    serve(args.port, args.host, args.lan, args.lan_port)
+    serve(args.port, args.host, args.lan, args.lan_port, args.buttons)
 
 
 if __name__ == "__main__":

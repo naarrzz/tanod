@@ -109,7 +109,7 @@ camera on the laptop, which can be an iPhone through Continuity Camera (pick it
 in the dropdown under the feed). While the camera is
 quarantined, the dashboard stops relaying the stream and shows why.
 
-The demo dashboard has **Demo controls** under the cameras: Hijack, Outside
+With `--buttons`, the demo dashboard also shows **Demo controls** under the cameras: Hijack, Outside
 scan and Reset buttons (no typing), plus a QR code the camera phone can scan
 (with `--lan`). `scripts/TANOD Demo.command` is a double-click launcher for
 macOS (copy it to the Desktop); it stops an older demo and starts
