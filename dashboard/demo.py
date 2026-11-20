@@ -88,12 +88,13 @@ def build_data(path: Path, cameras: int = 1) -> None:
 
 
 ATTACKS = {
-    "leak": "Camera sends a copy of its video to an unknown server",
+    "leak": "Camera tries unknown servers and sends them copies of its video",
     "scan": "Outside laptop port-scans the camera",
 }
 
 
-def run_attack(path: Path, which: str, camera: int = 1) -> None:
+def run_attack(path: Path, which: str, camera: int = 1, say=print) -> bool:
+    """Returns True when TANOD acted. Messages go to say() (print, or the dashboard)."""
     """Run one camera scenario through the real models and decision logic, then record it now."""
     import random
 
@@ -106,17 +107,17 @@ def run_attack(path: Path, which: str, camera: int = 1) -> None:
     conn = db.connect(path)
     n = max(conn.execute("SELECT COUNT(*) FROM devices WHERE kind='camera'").fetchone()[0], 1)
     if not 1 <= camera <= n:
-        print(f"There {'is' if n == 1 else 'are'} {n} camera{'s' if n > 1 else ''} in the demo. "
+        say(f"There {'is' if n == 1 else 'are'} {n} camera{'s' if n > 1 else ''} in the demo. "
               f"Start it with --cameras {camera} to have camera {camera}.")
-        return
+        return False
     reg = demo_cameras_registry(n)
     cam = [d.ip for d in reg.devices.values() if d.kind == "camera"][camera - 1]
     if which == "leak" and any(e["target_ip"] == cam for e in db.active_responses(db.connect(path))):
-        print(f"Camera {camera} is already cut off, so TANOD has nothing new to do (and sends no new alert).")
-        print("Release it on the dashboard first, or run: python -m dashboard.demo --reset")
-        return
-    print(f"Scenario: {ATTACKS[which]} (simulated traffic, dry run)")
-    print(f"Target: {db.device_by_ip(conn, cam)['name']} ({cam})")
+        say(f"Camera {camera} is already cut off, so TANOD has nothing new to do (and sends no new alert).")
+        say("Release it on the dashboard first, or reset the demo.")
+        return False
+    say(f"Scenario: {ATTACKS[which]} (simulated traffic, dry run)")
+    say(f"Target: {db.device_by_ip(conn, cam)['name']} ({cam})")
     bank, baselines = S.train_bank(reg, random.Random(7))
     t0 = 100_000.0
     attack = S.camera_leak(rng, cam, t0 + 10) if which == "leak" else S.t3_port_scan(rng, cam, t0 + 10)
@@ -129,8 +130,8 @@ def run_attack(path: Path, which: str, camera: int = 1) -> None:
                               "TANOD local: camera video sent to an unapproved address", 9000010)
         actions = S.run_scenario(which, attack, reg, bank, baselines, rng, t0, DecisionEngine(reg), [alert])
     if not actions:
-        print("TANOD took no action this time. Run it again.")
-        return
+        say("TANOD took no action this time. Run it again.")
+        return False
     enforcer = Enforcer(dry_run=True)
     for act in actions:
         dev = db.device_by_ip(conn, act.target)
@@ -142,9 +143,10 @@ def run_attack(path: Path, which: str, camera: int = 1) -> None:
         db.record_event(conn, act.kind, act.target, act.reason, act.source, act.risk, act.evidence,
                         target_mac=dev["mac"] if dev else None)
         name = dev["name"] if dev else "Unregistered client"
-        print(f"  {act.kind} {name} ({act.target}) via {act.source}" + (f", risk {act.risk}" if act.risk is not None else "") + ", "
+        say(f"  {act.kind} {name} ({act.target}) via {act.source}" + (f", risk {act.risk}" if act.risk is not None else "") + ", "
               f"{max(act.ts - t0 - 10, 0):.0f} s after the attack started")
-        print("  " + telegram.notify(act.kind, name, act.target, act.reason, act.risk))
+        say("  " + telegram.notify(act.kind, name, act.target, act.reason, act.risk))
+    return True
 
 
 def ensure_accounts(path: Path) -> None:
@@ -202,10 +204,12 @@ def serve(port: int, host: str, lan: bool, lan_port: int) -> None:
                                  f"Stop it with Ctrl+C in its terminal (or: kill $(lsof -tiTCP:{p} -sTCP:LISTEN)), "
                                  "then run this again.")
     configs = [uvicorn.Config("dashboard.app:app", host=host, port=port, log_level="warning")]
+    os.environ["TANOD_DEMO"] = "1"  # shows the demo buttons on the dashboard
     if lan:
         os.environ["TANOD_PHONE_CAMERA"] = "1"  # every camera is a phone; never fall back to the laptop camera
         ip = lan_ip()
         key, crt = make_cert(ip)
+        os.environ["TANOD_LAN_URL"] = f"https://{ip}:{lan_port}"
         configs.append(uvicorn.Config("dashboard.app:app", host="0.0.0.0", port=lan_port, log_level="warning",
                                       ssl_keyfile=key, ssl_certfile=crt))
         print(f"Phone camera: on each phone (same Wi-Fi), open  https://{ip}:{lan_port}/cam  and pick a camera")

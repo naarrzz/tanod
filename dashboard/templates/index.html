@@ -31,7 +31,7 @@
         <span>On the phone: open /cam and pick {{ c.name }}</span>
       </div>
     </div>
-    <p class="cam-why" {% if not c.isolated %}hidden{% endif %}><b>Why:</b> <span>{{ c.reason or "" }}</span>
+    <p class="cam-why" {% if not c.isolated %}hidden{% endif %}><b>Why:</b> <span>{{ c.reason or "" }}</span>.
       The camera cannot send video until the owner releases it.</p>
     <p class="muted cam-foot"><span class="cam-src"></span> <select class="cam-pick" hidden></select></p>
   </div>
@@ -170,9 +170,69 @@
   // Update the tables below without reloading, so the cameras keep running.
   async function refreshTables() {
     const doc = new DOMParser().parseFromString(await (await fetch("/", { cache: "no-store" })).text(), "text/html");
-    const fresh = doc.querySelectorAll("main > section:not(#camera)");
-    document.querySelectorAll("main > section:not(#camera)").forEach((sec, i) => { if (fresh[i]) sec.innerHTML = fresh[i].innerHTML; });
+    const fresh = doc.querySelectorAll("main > section:not(#camera):not(#demo)");
+    document.querySelectorAll("main > section:not(#camera):not(#demo)").forEach((sec, i) => { if (fresh[i]) sec.innerHTML = fresh[i].innerHTML; });
   }
+})();
+</script>
+{% endif %}
+
+{% if demo %}
+<section id="demo">
+  <h2>Demo controls <span class="muted" style="font-weight:400;font-size:14px">simulated traffic, only in the demo</span></h2>
+  <div class="demo-wrap">
+    <div class="demo-actions">
+      {% for c in cameras %}
+      <div class="demo-row">
+        <button class="btn" data-kind="leak" data-camera="{{ loop.index }}">Hijack {{ c.name }}</button>
+        <button class="btn secondary" data-kind="scan" data-camera="{{ loop.index }}">Outside scan on {{ c.name }}</button>
+      </div>
+      {% endfor %}
+      <div class="demo-row"><button class="btn secondary" id="demo-reset">Reset demo</button></div>
+      <pre id="demo-out" hidden></pre>
+    </div>
+    {% if lan_url %}
+    <div class="demo-qr">
+      <img src="/demo/qr.svg" alt="QR code for the phone camera page" width="148" height="148">
+      <div><b>Camera phone</b><br>Scan this on the phone (same Wi-Fi), accept the warning, sign in, pick a camera, tap Start.
+        <br><span class="muted" style="font-size:12px">{{ lan_url }}/cam</span></div>
+    </div>
+    {% endif %}
+  </div>
+</section>
+<style>
+  .demo-wrap { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; }
+  .demo-actions { flex:1 1 300px; }
+  .demo-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .demo-row .btn[disabled] { opacity:.5; cursor:wait; }
+  .demo-qr { display:flex; gap:12px; align-items:center; max-width:420px; font-size:14px; }
+  .demo-qr img { background:#fff; border:1px solid var(--line); border-radius:6px; flex:none; }
+  #demo-out { margin:4px 0 0; white-space:pre-wrap; }
+</style>
+<script>
+(() => {
+  const out = document.getElementById("demo-out");
+  const buttons = document.querySelectorAll("#demo button");
+  async function post(url, data) {
+    buttons.forEach(b => b.disabled = true);
+    out.hidden = false; out.textContent = "Running...";
+    try {
+      const r = await fetch(url, { method: "POST", body: data });
+      const j = await r.json();
+      out.textContent = j.lines ? j.lines.join("\n") : (j.ok ? "Done." : JSON.stringify(j));
+      return j;
+    } catch (e) { out.textContent = "Failed: " + e; }
+    finally { buttons.forEach(b => b.disabled = false); }
+  }
+  document.querySelectorAll("#demo [data-kind]").forEach(b => b.onclick = () => {
+    const f = new FormData(); f.append("kind", b.dataset.kind); f.append("camera", b.dataset.camera);
+    post("/demo/attack", f);
+  });
+  document.getElementById("demo-reset").onclick = async () => {
+    if (!confirm("Reset the demo to its starting state?")) return;
+    const j = await post("/demo/reset", new FormData());
+    if (j && j.ok) location.reload();
+  };
 })();
 </script>
 {% endif %}

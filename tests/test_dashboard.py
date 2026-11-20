@@ -170,3 +170,22 @@ def test_lan_mode_never_uses_laptop_camera(client, monkeypatch):
     db.upsert_device(client.app.state.conn, "IP Camera", "aa:bb:cc:00:00:04", "192.168.50.20", kind="camera")
     st = cams(client, ("owner", PW))["192.168.50.20"]
     assert st["source"] == "phone" and not st["live"]
+
+
+def test_demo_controls(client, monkeypatch):
+    auth = ("owner", PW)
+    monkeypatch.delenv("TANOD_DEMO", raising=False)
+    assert client.post("/demo/attack", data={"kind": "leak"}, auth=auth).status_code == 404
+    assert "Demo controls" not in client.get("/", auth=auth).text
+    monkeypatch.setenv("TANOD_DEMO", "1")
+    monkeypatch.delenv("TANOD_BOT_TOKEN", raising=False)
+    conn = client.app.state.conn
+    db.upsert_device(conn, "IP Camera", "aa:bb:cc:00:00:04", "192.168.50.20", kind="camera")
+    assert "Hijack IP Camera" in client.get("/", auth=auth).text
+    assert client.post("/demo/attack", data={"kind": "nope"}, auth=auth).status_code == 400
+    assert client.post("/demo/attack", data={"kind": "leak"}).status_code == 401
+    r = client.post("/demo/attack", data={"kind": "leak", "camera": 1}, auth=auth).json()
+    assert r["acted"] and any("quarantine IP Camera" in l for l in r["lines"])
+    assert cams(client, auth)["192.168.50.20"]["isolated"]
+    r = client.post("/demo/attack", data={"kind": "leak", "camera": 1}, auth=auth).json()
+    assert not r["acted"] and "already cut off" in r["lines"][0]

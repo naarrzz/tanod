@@ -109,7 +109,13 @@ camera on the laptop, which can be an iPhone through Continuity Camera (pick it
 in the dropdown under the feed). While the camera is
 quarantined, the dashboard stops relaying the stream and shows why.
 
-With the demo running, from a second terminal:
+The demo dashboard has **Demo controls** under the cameras: Hijack, Outside
+scan and Reset buttons (no typing), plus a QR code the camera phone can scan
+(with `--lan`). `scripts/TANOD Demo.command` is a double-click launcher for
+macOS (copy it to the Desktop); it stops an older demo and starts
+`--lan --cameras 1`.
+
+The same scenarios from a second terminal:
 
 ```bash
 .venv/bin/python -m dashboard.demo --attack leak   # camera tries unknown servers and sends them video -> camera cut off

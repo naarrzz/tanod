@@ -137,6 +137,8 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
             "dry_run": request.app.state.enforcer.dry_run,
             "user": user,
             "cameras": cams_state(request),
+            "demo": os.environ.get("TANOD_DEMO") == "1",
+            "lan_url": os.environ.get("TANOD_LAN_URL"),
         })
 
     @app.get("/camera/status")
@@ -224,6 +226,44 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
 
         return StreamingResponse(frames(), media_type="multipart/x-mixed-replace; boundary=frame",
                                  headers={"Cache-Control": "no-store"})
+
+    # ---- demo controls (only with TANOD_DEMO=1, set by python -m dashboard.demo) ----
+    def demo_on():
+        if os.environ.get("TANOD_DEMO") != "1":
+            raise HTTPException(404, "Demo controls are off")
+
+    @app.post("/demo/attack")
+    def demo_attack(request: Request, kind: str = Form("leak"), camera: int = Form(1),
+                    _=Depends(require_owner)):
+        demo_on()
+        from . import demo
+        if kind not in demo.ATTACKS:
+            raise HTTPException(400, "Unknown scenario")
+        lines: list[str] = []
+        acted = demo.run_attack(Path(app.state.conn.path), kind, camera, say=lines.append)
+        return JSONResponse({"acted": acted, "lines": [l.strip() for l in lines]})
+
+    @app.post("/demo/reset")
+    def demo_reset(request: Request, _=Depends(require_owner)):
+        demo_on()
+        from . import demo
+        n = len(list_cameras(request.app.state.conn)) or 1
+        demo.build_data(Path(app.state.conn.path), n)
+        return JSONResponse({"ok": True})
+
+    @app.get("/demo/qr.svg")
+    def demo_qr(request: Request, _=Depends(require_owner)):
+        demo_on()
+        url = os.environ.get("TANOD_LAN_URL")
+        if not url:
+            raise HTTPException(404, "Start the demo with --lan")
+        import io
+
+        import qrcode
+        import qrcode.image.svg
+        buf = io.BytesIO()
+        qrcode.make(url + "/cam", image_factory=qrcode.image.svg.SvgPathImage, box_size=8, border=2).save(buf)
+        return HTMLResponse(buf.getvalue(), media_type="image/svg+xml")
 
     @app.get("/events/{event_id}", response_class=HTMLResponse)
     def event_detail(event_id: int, request: Request, _=Depends(require_owner)):
