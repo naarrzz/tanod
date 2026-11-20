@@ -155,8 +155,15 @@ def make_cert(ip: str) -> tuple[str, str]:
 
 def serve(port: int, host: str, lan: bool, lan_port: int) -> None:
     import asyncio
+    import socket
 
     import uvicorn
+    for h, p in [(host, port)] + ([("0.0.0.0", lan_port)] if lan else []):
+        with socket.socket() as sk:
+            if sk.connect_ex(("127.0.0.1", p)) == 0:
+                raise SystemExit(f"Port {p} is already in use, most likely by another demo that is still running. "
+                                 f"Stop it with Ctrl+C in its terminal (or: kill $(lsof -tiTCP:{p} -sTCP:LISTEN)), "
+                                 "then run this again.")
     configs = [uvicorn.Config("dashboard.app:app", host=host, port=port, log_level="warning")]
     if lan:
         ip = lan_ip()
