@@ -52,7 +52,7 @@
   </div>
 </div>
 <canvas id="cv" width="640" height="360" hidden></canvas>
-<a href="/cam" style="position:fixed;top:calc(12px + env(safe-area-inset-top));right:12px;color:#fff;background:rgba(0,0,0,.5);padding:5px 9px;border-radius:6px;font-size:13px;text-decoration:none">Change</a>
+{% if cameras|length > 1 %}<a href="/cam" style="position:fixed;top:calc(12px + env(safe-area-inset-top));right:12px;color:#fff;background:rgba(0,0,0,.5);padding:5px 9px;border-radius:6px;font-size:13px;text-decoration:none">Change</a>{% endif %}
 <script>
 (() => {
   const vid = document.getElementById("vid"), cv = document.getElementById("cv"), g = cv.getContext("2d");

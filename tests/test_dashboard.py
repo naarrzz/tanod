@@ -189,3 +189,12 @@ def test_demo_controls(client, monkeypatch):
     assert cams(client, auth)["192.168.50.20"]["isolated"]
     r = client.post("/demo/attack", data={"kind": "leak", "camera": 1}, auth=auth).json()
     assert not r["acted"] and "already cut off" in r["lines"][0]
+
+
+def test_change_link_only_with_several_cameras(client):
+    conn = client.app.state.conn
+    auth = ("owner", PW)
+    db.upsert_device(conn, "IP Camera 1", "aa:bb:cc:00:00:04", "192.168.50.20", kind="camera")
+    assert ">Change</a>" not in client.get("/cam", auth=auth).text
+    db.upsert_device(conn, "IP Camera 2", "aa:bb:cc:00:01:02", "192.168.50.21", kind="camera")
+    assert ">Change</a>" in client.get("/cam?ip=192.168.50.21", auth=auth).text
