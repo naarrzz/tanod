@@ -60,6 +60,27 @@ TANOD_DASHBOARD_PASSWORD=change-this .venv/bin/uvicorn dashboard.app:app --port 
 
 Open http://127.0.0.1:8000.
 
+Accounts: once any account exists, each person signs in with their own
+username, and the built-in `owner` login stops working. Release asks for the
+signed-in user's password again.
+
+```bash
+.venv/bin/python -m dashboard.users add narz --name "Narz"     # asks for a password
+.venv/bin/python -m dashboard.users add rod --generate         # random password, printed once
+.venv/bin/python -m dashboard.users list
+```
+
+### Presentation demo
+
+```bash
+.venv/bin/python -m dashboard.demo            # demo data + member accounts, serves http://localhost:8000
+.venv/bin/python -m dashboard.demo --reset    # put the demo back (Node 1 quarantined, one blocked client)
+```
+
+The demo uses `data/demo.db` (simulated data, dry run) and creates accounts
+for narz, rod and christian the first time. Their passwords are saved in
+`data/demo_accounts.txt`, which is gitignored.
+
 Alerts go to a local stand-in for the Telegram API. In another terminal:
 
 ```bash

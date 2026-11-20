@@ -2,9 +2,11 @@
 
     TANOD_DASHBOARD_PASSWORD=... uvicorn dashboard.app:app --port 8000
 
-Every page asks for the dashboard password (HTTP Basic, user "owner").
-Release asks for the password again and an explicit confirmation, because it
-reconnects a device (and restores its power if the relay was cut).
+Every page asks for a username and password (HTTP Basic). Accounts live in the
+users table (add them with python -m dashboard.users add <name>). If no account
+exists yet, the single built-in user "owner" with TANOD_DASHBOARD_PASSWORD works.
+Release asks for the same user's password again and an explicit confirmation,
+because it reconnects a device (and restores its power if the relay was cut).
 
 Env:
   TANOD_DB                 SQLite path, default data/tanod.db
@@ -52,11 +54,19 @@ def check_password(given: str) -> bool:
     return hmac.compare_digest(given.encode(), _password().encode())
 
 
-def require_owner(creds: HTTPBasicCredentials = Depends(security)) -> str:
-    ok_user = secrets.compare_digest(creds.username.encode(), b"owner")
-    if not (ok_user and check_password(creds.password)):
-        raise HTTPException(401, "Wrong password", headers={"WWW-Authenticate": 'Basic realm="TANOD"'})
-    return creds.username
+def authenticate(conn, username: str, password: str) -> bool:
+    """Named accounts if any exist, otherwise the built-in "owner" + env password."""
+    if db.list_users(conn):
+        return db.check_user(conn, username, password)
+    ok_user = secrets.compare_digest(username.encode(), b"owner")
+    return ok_user and check_password(password)
+
+
+def require_owner(request: Request, creds: HTTPBasicCredentials = Depends(security)) -> str:
+    if not authenticate(request.app.state.conn, creds.username, creds.password):
+        raise HTTPException(401, "Wrong username or password",
+                            headers={"WWW-Authenticate": 'Basic realm="TANOD"'})
+    return creds.username.lower()
 
 
 def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> FastAPI:
@@ -65,13 +75,14 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
     app.state.enforcer = enforcer or Enforcer(dry_run=os.environ.get("TANOD_DRY_RUN", "1") != "0")
 
     @app.get("/", response_class=HTMLResponse)
-    def home(request: Request, _=Depends(require_owner)):
+    def home(request: Request, user: str = Depends(require_owner)):
         conn = request.app.state.conn
         return templates.TemplateResponse(request, "index.html", {
             "devices": db.list_devices(conn),
             "active": db.active_responses(conn),
             "events": db.list_events(conn, 30),
             "dry_run": request.app.state.enforcer.dry_run,
+            "user": user,
         })
 
     @app.get("/events/{event_id}", response_class=HTMLResponse)
@@ -96,12 +107,12 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
 
     @app.post("/release/{target}", response_class=HTMLResponse)
     def release(target: str, request: Request, password: str = Form(""), confirm: str = Form(""),
-                _=Depends(require_owner)):
+                user: str = Depends(require_owner)):
         conn = request.app.state.conn
         ev = _active_for(conn, target)
         dev = db.device_by_ip(conn, target)
         error = None
-        if not check_password(password):
+        if not authenticate(conn, user, password):
             error = "Wrong password."
         elif confirm != "yes":
             error = "Please tick the box to confirm."
@@ -112,7 +123,7 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
             target, mac=(dev["mac"] if dev else ev["target_mac"]), kind=ev["kind"],
             relay_channel=(dev["relay_channel"] if dev else None))
         db.mark_released(conn, target)
-        db.record_event(conn, "release", target, "Released by owner", "owner",
+        db.record_event(conn, "release", target, f"Released by {user}", "owner",
                         target_mac=(dev["mac"] if dev else ev["target_mac"]))
         return RedirectResponse("/", status_code=303)
 

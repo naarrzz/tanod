@@ -56,3 +56,26 @@ def test_release_needs_password_and_confirmation(client):
 
 def test_release_unknown_target_is_404(client):
     assert client.get("/release/192.168.50.77", auth=("owner", PW)).status_code == 404
+
+
+def test_named_accounts_replace_owner(client):
+    conn = client.app.state.conn
+    db.set_user(conn, "Rod", "rod-secret-1", "Rod")
+    assert client.get("/", auth=("owner", PW)).status_code == 401
+    assert client.get("/", auth=("rod", "wrong")).status_code == 401
+    r = client.get("/", auth=("rod", "rod-secret-1"))
+    assert r.status_code == 200 and "Signed in as rod" in r.text
+    # release checks the signed-in user's own password
+    auth = ("rod", "rod-secret-1")
+    r = client.post("/release/192.168.50.11", data={"password": PW, "confirm": "yes"}, auth=auth)
+    assert r.status_code == 400
+    r = client.post("/release/192.168.50.11", data={"password": "rod-secret-1", "confirm": "yes"}, auth=auth,
+                    follow_redirects=False)
+    assert r.status_code == 303
+    assert "Released by rod" in client.get("/", auth=auth).text
+
+
+def test_password_hash_roundtrip():
+    h = db.hash_password("abc12345")
+    assert h.startswith("pbkdf2_sha256$") and "abc12345" not in h
+    assert db.verify_password("abc12345", h) and not db.verify_password("abc12346", h)

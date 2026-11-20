@@ -1,7 +1,10 @@
 """SQLite storage for devices and events."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import secrets
 import sqlite3
 import time
 from pathlib import Path
@@ -30,6 +33,11 @@ CREATE TABLE IF NOT EXISTS events (
     risk REAL,
     evidence TEXT,               -- JSON
     released_at REAL
+);
+CREATE TABLE IF NOT EXISTS users (
+    username TEXT PRIMARY KEY,
+    display_name TEXT,
+    pw_hash TEXT NOT NULL        -- pbkdf2_sha256$iterations$salt$hash
 );
 """
 
@@ -103,3 +111,44 @@ def mark_released(conn, target_ip) -> int:
     conn.execute("UPDATE devices SET status='normal' WHERE ip=?", (target_ip,))
     conn.commit()
     return cur.rowcount
+
+
+# --- dashboard accounts ---------------------------------------------------
+PBKDF2_ITERATIONS = 200_000
+
+
+def hash_password(password: str, salt: str | None = None, iterations: int = PBKDF2_ITERATIONS) -> str:
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), iterations).hex()
+    return f"pbkdf2_sha256${iterations}${salt}${digest}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    try:
+        _, iterations, salt, _digest = stored.split("$")
+    except ValueError:
+        return False
+    return hmac.compare_digest(hash_password(password, salt, int(iterations)), stored)
+
+
+def set_user(conn, username: str, password: str, display_name: str | None = None) -> None:
+    conn.execute(
+        """INSERT INTO users (username, display_name, pw_hash) VALUES (?, ?, ?)
+           ON CONFLICT(username) DO UPDATE SET display_name=excluded.display_name, pw_hash=excluded.pw_hash""",
+        (username.lower(), display_name or username, hash_password(password)))
+    conn.commit()
+
+
+def delete_user(conn, username: str) -> int:
+    cur = conn.execute("DELETE FROM users WHERE username=?", (username.lower(),))
+    conn.commit()
+    return cur.rowcount
+
+
+def list_users(conn):
+    return conn.execute("SELECT username, display_name FROM users ORDER BY username").fetchall()
+
+
+def check_user(conn, username: str, password: str) -> bool:
+    row = conn.execute("SELECT pw_hash FROM users WHERE username=?", (username.lower(),)).fetchone()
+    return bool(row) and verify_password(password, row["pw_hash"])

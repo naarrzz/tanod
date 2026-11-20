@@ -33,7 +33,7 @@
 </style>
 </head>
 <body>
-<header><a href="/">TANOD</a><span class="muted" style="color:#9ca3af">Threat Analysis and Network Observation Device</span></header>
+<header><a href="/">TANOD</a><span class="muted" style="color:#9ca3af">Threat Analysis and Network Observation Device</span>{% if user %}<span class="muted" style="color:#9ca3af;margin-left:auto">Signed in as {{ user }}</span>{% endif %}</header>
 <main>
 {% block content %}{% endblock %}
 </main>
