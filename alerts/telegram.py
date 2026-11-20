@@ -95,8 +95,11 @@ def notify(action_kind: str, device_name: str, target: str, reason: str, risk: f
     if not configured():
         return "Telegram not set up (no .env), alert skipped"
     try:
-        send(build_payload(build_message(action_kind, device_name, target, reason, risk)))
-        return "Telegram alert sent"
+        res = send(build_payload(build_message(action_kind, device_name, target, reason, risk)))
+        if res.get("ok") is False:
+            return f"Telegram refused the alert: {res.get('description', res)}"
+        msg_id = (res.get("result") or {}).get("message_id")
+        return "Telegram alert sent" + (f" (message {msg_id})" if msg_id else "")
     except OSError as e:
         return f"Telegram alert failed: {e}"
 

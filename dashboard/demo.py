@@ -86,6 +86,10 @@ def run_attack(path: Path, which: str) -> None:
     rng = random.Random()
     reg = demo_registry()
     cam = next(d.ip for d in reg.devices.values() if d.kind == "camera")
+    if which == "leak" and any(e["target_ip"] == cam for e in db.active_responses(db.connect(path))):
+        print("The camera is already cut off, so TANOD has nothing new to do (and sends no new alert).")
+        print("Release it on the dashboard first, or run: python -m dashboard.demo --reset")
+        return
     print(f"Scenario: {ATTACKS[which]} (simulated traffic, dry run)")
     bank, baselines = S.train_bank(reg, random.Random(7))
     t0 = 100_000.0
