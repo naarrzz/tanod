@@ -75,36 +75,56 @@ def require_owner(request: Request, creds: HTTPBasicCredentials = Depends(securi
     return creds.username.lower()
 
 
-PHONE_FRESH_S = 4.0  # a phone counts as the camera while it sent a frame this recently
+PHONE_FRESH_S = 4.0  # a phone camera counts as live while it sent a frame this recently
 
 
-def camera_state(conn, phone_ts: float = 0.0) -> dict:
-    """The camera device, where its video comes from, and whether TANOD has it cut off."""
-    cam = conn.execute("SELECT * FROM devices WHERE kind='camera' ORDER BY id LIMIT 1").fetchone()
-    if not cam:
-        return {"present": False, "isolated": False}
-    ev = next((e for e in db.active_responses(conn) if e["target_ip"] == cam["ip"]), None)
-    if os.environ.get("TANOD_CAMERA_URL"):
+def list_cameras(conn):
+    return conn.execute("SELECT * FROM devices WHERE kind='camera' ORDER BY id").fetchall()
+
+
+def camera_state(conn, cam, phone_ts: float = 0.0, first: bool = True) -> dict:
+    """Where one camera's video comes from, whether it is live, and whether TANOD has it cut off.
+
+    Sources: "url" (TANOD_CAMERA_URL, first camera only), "phone" (a phone sends frames to
+    /camera/frame; forced for every camera when TANOD_PHONE_CAMERA=1, as in demo --lan) or
+    "laptop" (a camera on the computer showing the dashboard, first camera only)."""
+    active = db.active_responses(conn)
+    ev = next((e for e in active if e["target_ip"] == cam["ip"]), None)
+    if first and os.environ.get("TANOD_CAMERA_URL"):
         source = "url"
-    elif time.time() - phone_ts < PHONE_FRESH_S:
+    elif os.environ.get("TANOD_PHONE_CAMERA") == "1" or phone_ts or not first:
         source = "phone"
     else:
         source = "laptop"
     return {"present": True, "name": cam["name"], "ip": cam["ip"], "isolated": ev is not None,
             "since": datetime.fromtimestamp(ev["ts"]).strftime("%H:%M:%S") if ev else None,
             "reason": ev["reason"] if ev else None, "risk": ev["risk"] if ev else None,
-            "active": len(db.active_responses(conn)), "source": source}
+            "active": len(active), "source": source,
+            "live": source != "phone" or time.time() - phone_ts < PHONE_FRESH_S}
 
 
 def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> FastAPI:
     app = FastAPI(title="TANOD Dashboard")
     app.state.conn = db.connect(db_path or os.environ.get("TANOD_DB", "data/tanod.db"))
     app.state.enforcer = enforcer or Enforcer(dry_run=os.environ.get("TANOD_DRY_RUN", "1") != "0")
-    app.state.frame, app.state.frame_ts = None, 0.0  # latest JPEG from a phone camera page
+    app.state.frames = {}  # camera ip -> (latest JPEG from its phone page, time received)
     app.state.frame_cond = threading.Condition()
 
-    def cam_state(request):
-        return camera_state(request.app.state.conn, request.app.state.frame_ts)
+    def cams_state(request) -> list[dict]:
+        conn, frames = request.app.state.conn, request.app.state.frames
+        return [camera_state(conn, c, frames.get(c["ip"], (None, 0.0))[1], i == 0)
+                for i, c in enumerate(list_cameras(conn))]
+
+    def one_cam(request, ip: str | None) -> dict:
+        cams = cams_state(request)
+        if not cams:
+            raise HTTPException(404, "No camera is registered")
+        if ip is None:
+            return cams[0]
+        for c in cams:
+            if c["ip"] == ip:
+                return c
+        raise HTTPException(404, "No such camera")
 
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request, user: str = Depends(require_owner)):
@@ -115,41 +135,48 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
             "events": db.list_events(conn, 30),
             "dry_run": request.app.state.enforcer.dry_run,
             "user": user,
-            "camera": cam_state(request),
+            "cameras": cams_state(request),
         })
 
     @app.get("/camera/status")
     def camera_status(request: Request, _=Depends(require_owner)):
-        return JSONResponse(cam_state(request))
+        cams = cams_state(request)
+        return JSONResponse({"cameras": cams, "active": len(db.active_responses(request.app.state.conn))})
 
     @app.get("/cam", response_class=HTMLResponse)
-    def phone_camera_page(request: Request, user: str = Depends(require_owner)):
-        """Open this on a phone to use it as the camera."""
-        return templates.TemplateResponse(request, "cam.html", {"camera": cam_state(request), "user": user})
+    def phone_camera_page(request: Request, ip: str | None = None, user: str = Depends(require_owner)):
+        """Open this on a phone to use it as one of the cameras."""
+        cams = cams_state(request)
+        cam = one_cam(request, ip) if (ip or len(cams) == 1) else None
+        return templates.TemplateResponse(request, "cam.html", {"camera": cam, "cameras": cams, "user": user})
 
     @app.post("/camera/frame")
-    async def camera_frame(request: Request, _=Depends(require_owner)):
-        """One JPEG frame from the phone. Refused while the camera is quarantined,
+    async def camera_frame(request: Request, ip: str | None = None, _=Depends(require_owner)):
+        """One JPEG frame from a phone. Refused while that camera is quarantined,
         the same way the gateway firewall would drop the camera's traffic."""
-        st = cam_state(request)
+        st = one_cam(request, ip)
         if st["isolated"]:
             return JSONResponse({"isolated": True, "reason": st["reason"], "since": st["since"]}, status_code=503)
         body = await request.body()
         if not body.startswith(b"\xff\xd8") or len(body) > 2_000_000:
             raise HTTPException(400, "Send one JPEG image")
         with request.app.state.frame_cond:
-            request.app.state.frame, request.app.state.frame_ts = body, time.time()
+            request.app.state.frames[st["ip"]] = (body, time.time())
             request.app.state.frame_cond.notify_all()
         return JSONResponse({"isolated": False})
 
     @app.get("/camera/stream")
-    def camera_stream(request: Request, _=Depends(require_owner)):
-        """The camera feed as MJPEG, from TANOD_CAMERA_URL or from the phone page.
+    def camera_stream(request: Request, ip: str | None = None, _=Depends(require_owner)):
+        """One camera's feed as MJPEG, from TANOD_CAMERA_URL or from its phone page.
         It stops the moment the camera is quarantined."""
-        st = cam_state(request)
+        st = one_cam(request, ip)
         if st["isolated"]:
             raise HTTPException(503, "Camera is isolated by TANOD")
-        conn, state = request.app.state.conn, request.app.state
+        conn, state, cam_ip = request.app.state.conn, request.app.state, st["ip"]
+
+        def isolated() -> bool:
+            return any(e["target_ip"] == cam_ip for e in db.active_responses(conn))
+
         if st["source"] == "url":
             try:
                 upstream = urllib.request.urlopen(os.environ["TANOD_CAMERA_URL"], timeout=5)
@@ -162,7 +189,7 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
                     while True:
                         if time.time() - checked > 0.5:
                             checked = time.time()
-                            if camera_state(conn)["isolated"]:
+                            if isolated():
                                 break
                         chunk = upstream.read(16384)
                         if not chunk:
@@ -174,16 +201,16 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
             ctype = upstream.headers.get("Content-Type", "multipart/x-mixed-replace")
             return StreamingResponse(relay(), media_type=ctype, headers={"Cache-Control": "no-store"})
 
-        if st["source"] != "phone":
-            raise HTTPException(404, "No camera stream. Open /cam on the phone, or set TANOD_CAMERA_URL.")
+        if st["source"] != "phone" or not st["live"]:
+            raise HTTPException(404, "No video from this camera yet. Open /cam on the phone.")
 
         def frames():
             last = None
             while True:
                 with state.frame_cond:
                     state.frame_cond.wait(timeout=1.0)
-                    frame, ts = state.frame, state.frame_ts
-                if camera_state(conn)["isolated"] or time.time() - ts > PHONE_FRESH_S:
+                    frame, ts = state.frames.get(cam_ip, (None, 0.0))
+                if isolated() or time.time() - ts > PHONE_FRESH_S:
                     break
                 if frame is None or frame is last:
                     continue

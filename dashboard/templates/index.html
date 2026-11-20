@@ -2,133 +2,159 @@
 {% block content %}
 {% if dry_run %}<div class="banner">Dry-run mode: firewall and relay actions are logged, not applied.</div>{% endif %}
 
-{% if camera.present %}
-<section id="camera" data-isolated="{{ 1 if camera.isolated else 0 }}" data-active="{{ camera.active }}" data-source="{{ camera.source }}">
-  <h2 style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">Live camera
-    <span class="muted" style="font-weight:400;font-size:14px">{{ camera.name }} · {{ camera.ip }}</span>
-    <span id="cam-pill" class="pill {{ 'quarantined' if camera.isolated else 'normal' }}" style="margin-left:auto">{{ "cut off" if camera.isolated else "live" }}</span>
+{% if cameras %}
+<section id="camera" data-active="{{ cameras[0].active }}">
+  <h2 style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">Live {{ "cameras" if cameras|length > 1 else "camera" }}
+    {% if cameras|length > 1 %}
+    <select id="cam-view" style="font:inherit;font-size:14px;font-weight:400;margin-left:auto">
+      <option value="all">All cameras ({{ cameras|length }})</option>
+      {% for c in cameras %}<option value="{{ c.ip }}">{{ c.name }}{{ " (cut off)" if c.isolated else "" }}</option>{% endfor %}
+    </select>
+    {% endif %}
   </h2>
-  <div class="cam-box">
-    <img id="cam-img" alt="Camera feed" hidden>
-    <video id="cam-vid" autoplay muted playsinline hidden></video>
-    <canvas id="cam-test" width="640" height="360" hidden></canvas>
-    <div id="cam-rec" class="cam-rec">● REC <span id="cam-clock"></span></div>
-    <div id="cam-off" class="cam-off" {% if not camera.isolated %}hidden{% endif %}>
-      <b>Camera cut off by TANOD</b>
-      <span id="cam-why">{{ camera.reason or "" }}{% if camera.since %} · since {{ camera.since }}{% endif %}</span>
-      <span>The camera can no longer send video anywhere until the owner releases it.</span>
+  <div class="cam-grid">
+  {% for c in cameras %}
+  <div class="cam-tile" data-ip="{{ c.ip }}" data-source="{{ c.source }}" data-live="{{ 1 if c.live else 0 }}" data-isolated="{{ 1 if c.isolated else 0 }}">
+    <div class="cam-head"><b>{{ c.name }}</b> <span class="muted">{{ c.ip }}</span>
+      <span class="pill cam-pill {{ 'quarantined' if c.isolated else 'normal' }}">{{ "cut off" if c.isolated else "live" }}</span></div>
+    <div class="cam-box">
+      <img alt="{{ c.name }} feed" hidden>
+      <video autoplay muted playsinline hidden></video>
+      <canvas width="640" height="360" hidden></canvas>
+      <div class="cam-rec">● REC <span class="cam-clock"></span></div>
+      <div class="cam-off cam-cut" {% if not c.isolated %}hidden{% endif %}>
+        <b>Camera cut off by TANOD</b>
+        <span class="cam-why">{{ c.reason or "" }}{% if c.since %} · since {{ c.since }}{% endif %}</span>
+        <span>The camera can no longer send video anywhere until the owner releases it.</span>
+      </div>
+      <div class="cam-off cam-wait" hidden>
+        <b style="color:#e5e7eb">Waiting for video</b>
+        <span>Open <code>/cam?ip={{ c.ip }}</code> on the phone for this camera (run the demo with --lan) and tap Start.</span>
+      </div>
     </div>
+    <p class="muted cam-foot"><span class="cam-src"></span> <select class="cam-pick" hidden></select></p>
   </div>
-  <p class="muted" style="margin:8px 0 0;font-size:13px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-    <span id="cam-src"></span>
-    <select id="cam-pick" hidden style="font:inherit;font-size:13px"></select>
-  </p>
+  {% endfor %}
+  </div>
 </section>
 <style>
-  .cam-box { position:relative; background:#000; border-radius:6px; overflow:hidden; aspect-ratio:16/9; max-height:420px; }
-  .cam-box img, .cam-box video, .cam-box canvas { width:100%; height:100%; object-fit:cover; display:block; }
+  .cam-grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); }
+  .cam-grid.single { grid-template-columns:1fr; max-width:760px; }
+  .cam-tile[hidden] { display:none; }
+  .cam-head { display:flex; gap:8px; align-items:baseline; margin-bottom:8px; flex-wrap:wrap; }
+  .cam-head .pill { margin-left:auto; }
+  .cam-box { position:relative; background:#000; border-radius:6px; overflow:hidden; aspect-ratio:16/9; }
   .cam-box [hidden] { display:none !important; }
-  .cam-rec { position:absolute; top:10px; left:12px; color:#fff; font:600 13px/1 ui-monospace, monospace;
+  .cam-box img, .cam-box video, .cam-box canvas { width:100%; height:100%; object-fit:cover; display:block; }
+  .cam-rec { position:absolute; top:10px; left:12px; color:#ff4d4d; font:600 13px/1 ui-monospace, monospace;
              background:rgba(0,0,0,.45); padding:5px 8px; border-radius:4px; }
-  .cam-rec { color:#ff4d4d; } .cam-rec span { color:#fff; }
+  .cam-rec span { color:#fff; }
   .cam-off { position:absolute; inset:0; display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center;
              text-align:center; padding:16px; background:#111; color:#e5e7eb; }
-  .cam-off[hidden] { display:none; }
-  .cam-off b { color:#f87171; font-size:20px; }
-  .cam-off span { max-width:520px; font-size:14px; }
+  .cam-off b { color:#f87171; font-size:18px; }
+  .cam-off span { max-width:480px; font-size:14px; }
+  .cam-off code { background:#1f2937; padding:1px 5px; border-radius:4px; }
+  .cam-foot { margin:8px 0 0; font-size:13px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 </style>
 <script>
 (() => {
-  const box = document.getElementById("camera");
-  const img = document.getElementById("cam-img"), vid = document.getElementById("cam-vid");
-  const test = document.getElementById("cam-test"), off = document.getElementById("cam-off");
-  const rec = document.getElementById("cam-rec"), clock = document.getElementById("cam-clock");
-  const src = document.getElementById("cam-src"), pick = document.getElementById("cam-pick");
-  const pill = document.getElementById("cam-pill"), why = document.getElementById("cam-why");
-  let source = box.dataset.source;
-  let isolated = box.dataset.isolated === "1", active = +box.dataset.active, stream = null, testTimer = null;
+  const section = document.getElementById("camera");
+  let active = +section.dataset.active;
+  setInterval(() => { document.querySelectorAll(".cam-clock").forEach(e => e.textContent = new Date().toLocaleTimeString()); }, 500);
 
-  setInterval(() => { clock.textContent = new Date().toLocaleTimeString(); }, 500);
+  function tile(el) {
+    const q = s => el.querySelector(s);
+    const img = q("img"), vid = q("video"), test = q("canvas"), rec = q(".cam-rec");
+    const cut = q(".cam-cut"), wait = q(".cam-wait"), why = q(".cam-why"), src = q(".cam-src"), pick = q(".cam-pick");
+    const pill = q(".cam-pill"), ip = el.dataset.ip;
+    let st = { source: el.dataset.source, live: el.dataset.live === "1", isolated: el.dataset.isolated === "1" };
+    let stream = null, testTimer = null, shown = null;
 
-  function showOnly(el) { [img, vid, test].forEach(e => e.hidden = e !== el); }
-
-  function testPattern() {
-    showOnly(test);
-    src.textContent = "No camera found: showing a test pattern.";
-    const g = test.getContext("2d"); let x = 0;
-    clearInterval(testTimer);
-    testTimer = setInterval(() => {
-      const bars = ["#c0c0c0","#c0c000","#00c0c0","#00c000","#c000c0","#c00000","#0000c0"];
-      bars.forEach((c, i) => { g.fillStyle = c; g.fillRect(i * 640 / 7, 0, 640 / 7 + 1, 360); });
-      g.fillStyle = "rgba(0,0,0,.6)"; g.fillRect(0, 300, 640, 60);
-      g.fillStyle = "#fff"; g.font = "bold 22px monospace"; g.fillText("TANOD TEST PATTERN", 20, 338);
-      g.fillRect((x = (x + 6) % 640), 290, 40, 6);
-    }, 100);
-  }
-
-  async function browserCam(deviceId) {
-    try {
-      if (stream) stream.getTracks().forEach(t => t.stop());
-      let saved = null; try { saved = localStorage.getItem("tanod-cam"); } catch (e) {}
-      const want = deviceId || saved;
-      stream = await navigator.mediaDevices.getUserMedia({ video: want ? { deviceId: { ideal: want } } : true, audio: false });
-      vid.srcObject = stream; showOnly(vid);
-      const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
-      const current = stream.getVideoTracks()[0].getSettings().deviceId;
-      const phone = cams.find(c => /iphone|phone|continuity/i.test(c.label));
-      if (!want && phone && phone.deviceId !== current) return browserCam(phone.deviceId);
-      pick.innerHTML = cams.map(c => `<option value="${c.deviceId}" ${c.deviceId === current ? "selected" : ""}>${c.label || "Camera"}</option>`).join("");
-      pick.hidden = cams.length < 2;
-      src.textContent = "Camera on this laptop.";
-    } catch (e) { testPattern(); }
-  }
-  pick.onchange = () => { try { localStorage.setItem("tanod-cam", pick.value); } catch (e) {} if (!isolated) browserCam(pick.value); };
-
-  function start() {
-    off.hidden = true; rec.hidden = false;
-    if (source === "url" || source === "phone") {
+    const showOnly = x => [img, vid, test].forEach(e => e.hidden = e !== x);
+    function stopAll() {
+      img.removeAttribute("src");
       if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
-      clearInterval(testTimer); pick.hidden = true;
-      img.onerror = () => { if (!isolated) src.textContent = "Camera stream stopped."; };
-      img.src = "/camera/stream?t=" + Date.now(); showOnly(img);
-      src.textContent = source === "phone" ? "Live from the phone camera, sent over Wi-Fi through TANOD."
-                                           : "Stream relayed through TANOD from the camera.";
-    } else if (navigator.mediaDevices) { browserCam(); } else { testPattern(); }
+      clearInterval(testTimer); showOnly(null);
+    }
+    function testPattern() {
+      showOnly(test); src.textContent = "No camera found: showing a test pattern.";
+      const g = test.getContext("2d"); let x = 0;
+      clearInterval(testTimer);
+      testTimer = setInterval(() => {
+        ["#c0c0c0","#c0c000","#00c0c0","#00c000","#c000c0","#c00000","#0000c0"].forEach((c, i) => { g.fillStyle = c; g.fillRect(i * 640 / 7, 0, 640 / 7 + 1, 360); });
+        g.fillStyle = "rgba(0,0,0,.6)"; g.fillRect(0, 300, 640, 60);
+        g.fillStyle = "#fff"; g.font = "bold 22px monospace"; g.fillText("TANOD TEST PATTERN", 20, 338);
+        g.fillRect((x = (x + 6) % 640), 290, 40, 6);
+      }, 100);
+    }
+    async function laptopCam(deviceId) {
+      try {
+        if (stream) stream.getTracks().forEach(t => t.stop());
+        let saved = null; try { saved = localStorage.getItem("tanod-cam"); } catch (e) {}
+        const want = deviceId || saved;
+        stream = await navigator.mediaDevices.getUserMedia({ video: want ? { deviceId: { ideal: want } } : true, audio: false });
+        vid.srcObject = stream; showOnly(vid);
+        const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+        const current = stream.getVideoTracks()[0].getSettings().deviceId;
+        pick.innerHTML = cams.map(c => `<option value="${c.deviceId}" ${c.deviceId === current ? "selected" : ""}>${c.label || "Camera"}</option>`).join("");
+        pick.hidden = cams.length < 2;
+        src.textContent = "Camera on this computer.";
+      } catch (e) { testPattern(); }
+    }
+    pick.onchange = () => { try { localStorage.setItem("tanod-cam", pick.value); } catch (e) {} laptopCam(pick.value); };
+
+    // Decide what the tile shows. Only restart a feed when what it should show changes,
+    // so a short pause from the phone never flips to another camera.
+    function render() {
+      if (el.hidden) { if (shown !== "hidden") { shown = "hidden"; stopAll(); } return; }
+      const want = st.isolated ? "cut" : (st.source === "phone" && !st.live) ? "wait" : st.source;
+      pill.textContent = st.isolated ? "cut off" : want === "wait" ? "no video" : "live";
+      pill.className = "pill cam-pill " + (st.isolated ? "quarantined" : want === "wait" ? "" : "normal");
+      cut.hidden = want !== "cut"; wait.hidden = want !== "wait"; rec.hidden = want === "cut" || want === "wait";
+      if (st.isolated && st.reason) why.textContent = `${st.reason} · since ${st.since}` + (st.risk != null ? ` · risk ${Math.round(st.risk)}` : "");
+      if (want === shown) return;
+      shown = want; stopAll(); pick.hidden = true;
+      if (want === "laptop") { navigator.mediaDevices ? laptopCam() : testPattern(); }
+      else if (want === "phone" || want === "url") {
+        img.src = `/camera/stream?ip=${encodeURIComponent(ip)}&t=${Date.now()}`; showOnly(img);
+        img.onerror = () => { shown = null; };  // reopen on the next status check
+        src.textContent = want === "phone" ? "Live from a phone camera, sent over Wi-Fi through TANOD." : "Stream relayed through TANOD from the camera.";
+      } else src.textContent = "";
+    }
+    render();
+    return { ip, update(n) { if (n) st = n; render(); } };
   }
 
-  function stop(st) {
-    img.removeAttribute("src");
-    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
-    clearInterval(testTimer);
-    [img, vid, test].forEach(e => e.hidden = true);
-    rec.hidden = true; off.hidden = false;
-    if (st) why.textContent = `${st.reason || ""} · since ${st.since}` + (st.risk != null ? ` · risk ${Math.round(st.risk)}` : "");
+  // One camera or all of them. Hidden tiles stop their feed to save bandwidth.
+  const view = document.getElementById("cam-view");
+  function applyView() {
+    const v = view ? view.value : "all";
+    document.querySelectorAll(".cam-tile").forEach(t => t.hidden = v !== "all" && t.dataset.ip !== v);
+    document.querySelector(".cam-grid").classList.toggle("single", v !== "all");
   }
-
-  isolated ? stop() : start();
-
+  if (view) {
+    try { const saved = localStorage.getItem("tanod-view"); if ([...view.options].some(o => o.value === saved)) view.value = saved; } catch (e) {}
+    view.onchange = () => { try { localStorage.setItem("tanod-view", view.value); } catch (e) {} applyView(); tiles.forEach(t => t.update()); };
+  }
+  applyView();
+  const tiles = [...document.querySelectorAll(".cam-tile")].map(tile);
   setInterval(async () => {
     try {
-      const st = await (await fetch("/camera/status", { cache: "no-store" })).json();
-      if (st.isolated !== isolated) {
-        isolated = st.isolated;
-        pill.textContent = isolated ? "cut off" : "live";
-        pill.className = "pill " + (isolated ? "quarantined" : "normal");
-        isolated ? stop(st) : start();
-      }
-      if (st.source !== source) { source = st.source; if (!isolated) start(); }
-      if (st.active !== active) { active = st.active; setTimeout(refreshTables, 300); }
+      const res = await (await fetch("/camera/status", { cache: "no-store" })).json();
+      res.cameras.forEach(c => {
+        const t = tiles.find(t => t.ip === c.ip); if (t) t.update(c);
+        const o = view && [...view.options].find(o => o.value === c.ip);
+        if (o) o.textContent = c.name + (c.isolated ? " (cut off)" : "");
+      });
+      if (res.active !== active) { active = res.active; setTimeout(refreshTables, 300); }
     } catch (e) {}
   }, 1000);
 
-  // Update the tables below without reloading, so the camera keeps running.
+  // Update the tables below without reloading, so the cameras keep running.
   async function refreshTables() {
-    const html = await (await fetch("/", { cache: "no-store" })).text();
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    document.querySelectorAll("main > section:not(#camera)").forEach((sec, i) => {
-      const fresh = doc.querySelectorAll("main > section:not(#camera)")[i];
-      if (fresh) sec.innerHTML = fresh.innerHTML;
-    });
+    const doc = new DOMParser().parseFromString(await (await fetch("/", { cache: "no-store" })).text(), "text/html");
+    const fresh = doc.querySelectorAll("main > section:not(#camera)");
+    document.querySelectorAll("main > section:not(#camera)").forEach((sec, i) => { if (fresh[i]) sec.innerHTML = fresh[i].innerHTML; });
   }
 })();
 </script>

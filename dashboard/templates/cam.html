@@ -26,6 +26,16 @@
 </style>
 </head>
 <body>
+{% if not camera %}
+<div style="padding:24px calc(16px + env(safe-area-inset-right)) 24px calc(16px + env(safe-area-inset-left));max-width:480px;margin:0 auto">
+  <h2 style="margin:0 0 6px">Which camera is this phone?</h2>
+  <p style="color:#9ca3af;margin:0 0 16px">Pick the camera this phone will act as.</p>
+  {% for c in cameras %}
+  <a href="/cam?ip={{ c.ip }}" style="display:flex;justify-content:space-between;gap:8px;padding:14px 16px;margin-bottom:10px;border-radius:10px;background:#1f2937;color:#fff;text-decoration:none">
+    <b>{{ c.name }}</b><span style="color:#9ca3af">{{ "cut off" if c.isolated else ("in use" if c.source == "phone" and c.live else c.ip) }}</span></a>
+  {% endfor %}
+</div>
+{% else %}
 <div class="wrap" id="wrap">
   <video id="vid" autoplay muted playsinline></video>
   <div class="label">TANOD · {{ camera.name }} · {{ camera.ip }}</div>
@@ -42,12 +52,14 @@
   </div>
 </div>
 <canvas id="cv" width="640" height="360" hidden></canvas>
+<a href="/cam" style="position:fixed;top:calc(12px + env(safe-area-inset-top));right:12px;color:#fff;background:rgba(0,0,0,.5);padding:5px 9px;border-radius:6px;font-size:13px;text-decoration:none">Change</a>
 <script>
 (() => {
   const vid = document.getElementById("vid"), cv = document.getElementById("cv"), g = cv.getContext("2d");
   const wrap = document.getElementById("wrap"), msg = document.getElementById("msg");
   const off = document.getElementById("off"), why = document.getElementById("why");
   const go = document.getElementById("go"), flip = document.getElementById("flip");
+  const ip = {{ camera.ip|tojson }};
   let stream = null, facing = "environment", sending = false, isolated = false, sent = 0, wake = null;
 
   async function openCam() {
@@ -69,8 +81,9 @@
     while (sending) {
       if (isolated) {
         try {
-          const st = await (await fetch("/camera/status", { cache: "no-store" })).json();
-          if (!st.isolated) setIsolated(false);
+          const res = await (await fetch("/camera/status", { cache: "no-store" })).json();
+          const st = res.cameras.find(c => c.ip === ip);
+          if (st && !st.isolated) setIsolated(false);
         } catch (e) {}
         await new Promise(r => setTimeout(r, 1000));
         continue;
@@ -81,7 +94,7 @@
       g.drawImage(vid, 0, 0, cv.width, cv.height);
       const blob = await new Promise(r => cv.toBlob(r, "image/jpeg", 0.6));
       try {
-        const res = await fetch("/camera/frame", { method: "POST", body: blob, headers: { "Content-Type": "image/jpeg" } });
+        const res = await fetch("/camera/frame?ip=" + encodeURIComponent(ip), { method: "POST", body: blob, headers: { "Content-Type": "image/jpeg" } });
         if (res.status === 503) setIsolated(true, await res.json());
         else if (res.ok) { sent++; if (sent === 1) setIsolated(false); }
         else msg.textContent = "TANOD refused the frame (" + res.status + ").";
@@ -112,5 +125,6 @@
   flip.onclick = async () => { facing = facing === "environment" ? "user" : "environment"; try { await openCam(); } catch (e) {} };
 })();
 </script>
+{% endif %}
 </body>
 </html>

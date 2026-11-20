@@ -92,11 +92,17 @@ camera is a phone on the same Wi-Fi as the Mac:
 .venv/bin/python -m dashboard.demo --lan   # prints https://<mac-ip>:8443/cam
 ```
 
-Open that link on the phone, accept the certificate warning (it is the demo's
+Open that link on the phone, pick which camera the phone is, accept the certificate warning (it is the demo's
 own self-signed certificate in `data/certs/`), sign in, allow the camera and tap
 Start. The phone sends JPEG frames to TANOD, and the dashboard on the Mac
 (http://localhost:8000) shows them live. While the camera is quarantined, TANOD
 refuses the phone's frames and both screens say it was cut off.
+
+**Several cameras.** `--cameras 4` gives the demo four cameras (kept until
+changed). The dashboard shows them as a grid, with a dropdown to watch all of
+them or just one. Each phone opens `/cam` and picks its camera. Attack one with
+`--attack leak --camera 3`. With `--lan`, the dashboard never falls back to the
+laptop camera, so a phone pausing for a moment does not switch feeds.
 
 Other sources: `TANOD_CAMERA_URL` (an MJPEG stream from an IP camera app), or a
 camera on the laptop, which can be an iPhone through Continuity Camera (pick it
@@ -106,7 +112,7 @@ quarantined, the dashboard stops relaying the stream and shows why.
 With the demo running, from a second terminal:
 
 ```bash
-.venv/bin/python -m dashboard.demo --attack leak   # camera sends its video to an unknown server -> camera cut off
+.venv/bin/python -m dashboard.demo --attack leak   # camera tries unknown servers and sends them video -> camera cut off
 .venv/bin/python -m dashboard.demo --attack scan   # outside laptop scans the camera -> attacker blocked, feed stays
 ```
 

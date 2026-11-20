@@ -107,22 +107,27 @@ def test_change_password_needs_named_accounts(client):
     assert r.status_code == 400 and "TANOD_DASHBOARD_PASSWORD" in r.text
 
 
+def cams(client, auth):
+    return {c["ip"]: c for c in client.get("/camera/status", auth=auth).json()["cameras"]}
+
+
 def test_camera_status_follows_quarantine(client, monkeypatch):
+    monkeypatch.delenv("TANOD_CAMERA_URL", raising=False)
+    monkeypatch.delenv("TANOD_PHONE_CAMERA", raising=False)
     conn = client.app.state.conn
     db.upsert_device(conn, "IP Camera", "aa:bb:cc:00:00:04", "192.168.50.20", kind="camera")
     auth = ("owner", PW)
-    st = client.get("/camera/status", auth=auth).json()
-    assert st["present"] and not st["isolated"]
+    st = cams(client, auth)["192.168.50.20"]
+    assert st["source"] == "laptop" and not st["isolated"]
     assert "Live camera" in client.get("/", auth=auth).text
-    monkeypatch.delenv("TANOD_CAMERA_URL", raising=False)
     assert client.get("/camera/stream", auth=auth).status_code == 404
     db.record_event(conn, "quarantine", "192.168.50.20", "Sent video to a new address", "isolation_forest", 67.0)
-    st = client.get("/camera/status", auth=auth).json()
+    st = cams(client, auth)["192.168.50.20"]
     assert st["isolated"] and st["reason"] == "Sent video to a new address"
     monkeypatch.setenv("TANOD_CAMERA_URL", "http://127.0.0.1:9/video")
     assert client.get("/camera/stream", auth=auth).status_code == 503
     db.mark_released(conn, "192.168.50.20")
-    assert not client.get("/camera/status", auth=auth).json()["isolated"]
+    assert not cams(client, auth)["192.168.50.20"]["isolated"]
 
 
 def test_camera_status_needs_login(client):
@@ -134,16 +139,34 @@ JPEG = b"\xff\xd8\xff\xe0" + b"0" * 100
 
 def test_phone_frames_and_cutoff(client, monkeypatch):
     monkeypatch.delenv("TANOD_CAMERA_URL", raising=False)
+    monkeypatch.delenv("TANOD_PHONE_CAMERA", raising=False)
     conn = client.app.state.conn
-    db.upsert_device(conn, "IP Camera", "aa:bb:cc:00:00:04", "192.168.50.20", kind="camera")
+    db.upsert_device(conn, "IP Camera 1", "aa:bb:cc:00:00:04", "192.168.50.20", kind="camera")
+    db.upsert_device(conn, "IP Camera 2", "aa:bb:cc:00:01:02", "192.168.50.21", kind="camera")
     auth = ("owner", PW)
-    assert client.get("/camera/status", auth=auth).json()["source"] == "laptop"
-    assert "Tap Start" in client.get("/cam", auth=auth).text
-    assert client.post("/camera/frame", content=b"not a jpeg", auth=auth).status_code == 400
-    assert client.post("/camera/frame", content=JPEG, auth=auth).status_code == 200
-    assert client.get("/camera/status", auth=auth).json()["source"] == "phone"
-    db.record_event(conn, "quarantine", "192.168.50.20", "Sent video to a new address", "isolation_forest", 67.0)
-    r = client.post("/camera/frame", content=JPEG, auth=auth)
+    st = cams(client, auth)
+    assert st["192.168.50.20"]["source"] == "laptop"
+    assert st["192.168.50.21"]["source"] == "phone" and not st["192.168.50.21"]["live"]
+    assert "Which camera is this phone?" in client.get("/cam", auth=auth).text
+    assert "Tap Start" in client.get("/cam?ip=192.168.50.21", auth=auth).text
+    assert client.get("/cam?ip=10.0.0.1", auth=auth).status_code == 404
+    url = "/camera/frame?ip=192.168.50.21"
+    assert client.post(url, content=b"not a jpeg", auth=auth).status_code == 400
+    assert client.post(url, content=JPEG, auth=auth).status_code == 200
+    st = cams(client, auth)
+    assert st["192.168.50.21"]["live"] and st["192.168.50.20"]["source"] == "laptop"
+    db.record_event(conn, "quarantine", "192.168.50.21", "Sent video to a new address", "isolation_forest", 67.0)
+    r = client.post(url, content=JPEG, auth=auth)
     assert r.status_code == 503 and r.json()["isolated"]
-    assert client.get("/camera/stream", auth=auth).status_code == 503
-    assert client.post("/camera/frame", content=JPEG).status_code == 401
+    assert client.get("/camera/stream?ip=192.168.50.21", auth=auth).status_code == 503
+    # the other camera is not affected
+    assert client.post("/camera/frame?ip=192.168.50.20", content=JPEG, auth=auth).status_code == 200
+    assert client.post(url, content=JPEG).status_code == 401
+
+
+def test_lan_mode_never_uses_laptop_camera(client, monkeypatch):
+    monkeypatch.delenv("TANOD_CAMERA_URL", raising=False)
+    monkeypatch.setenv("TANOD_PHONE_CAMERA", "1")
+    db.upsert_device(client.app.state.conn, "IP Camera", "aa:bb:cc:00:00:04", "192.168.50.20", kind="camera")
+    st = cams(client, ("owner", PW))["192.168.50.20"]
+    assert st["source"] == "phone" and not st["live"]

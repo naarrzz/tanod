@@ -27,7 +27,6 @@ GATEWAY = "192.168.50.1"
 ATTACKER = "192.168.50.99"  # unregistered client with a leaked passphrase
 UNKNOWN_SERVER = "10.10.0.66"
 C2_SERVER = "10.10.0.99"
-LEAK_SERVER = "10.10.0.77"  # exhibit scenario: where a hijacked camera would send its video
 
 
 # ---- normal traffic ------------------------------------------------------
@@ -125,16 +124,29 @@ def t8_beacon(rng, node, t0, dur=12.0):
 
 
 def camera_leak(rng, cam, t0, dur=10.0):
-    """Exhibit scenario (not one of the six thesis tests): the camera starts
-    sending a second copy of its video to an unknown server."""
+    """Exhibit scenario (not one of the six thesis tests): a hijacked camera tries
+    several unknown servers (some refuse) and streams copies of its video to
+    the ones that answer."""
     out, t = [], t0
-    sp = rng.randint(30000, 60000)
-    out += [Packet(t0, cam, LEAK_SERVER, 60, "tcp", sp, 8554, syn=True),
-            Packet(t0 + .01, LEAK_SERVER, cam, 60, "tcp", 8554, sp, syn=True, ack=True)]
+    servers = [f"10.10.0.{i}" for i in range(70, 76)]
+    ports = [554, 8554, 443, 8080]
+    live: list[tuple[str, int, int]] = []
+    next_try = t0
     while t < t0 + dur:
-        out.append(Packet(t, cam, LEAK_SERVER, rng.randint(1200, 1400), "tcp", sp, 8554, ack=True))
-        if rng.random() < 0.2:
-            out.append(Packet(t + .005, LEAK_SERVER, cam, 60, "tcp", 8554, sp, ack=True))
+        if t >= next_try:  # try a new server about four times a second
+            dst, dport, sp = rng.choice(servers), rng.choice(ports), rng.randint(30000, 60000)
+            out.append(Packet(t, cam, dst, 60, "tcp", sp, dport, syn=True))
+            if rng.random() < 0.35:
+                out.append(Packet(t + .01, dst, cam, 54, "tcp", dport, sp, rst=True, ack=True))
+            else:
+                out.append(Packet(t + .01, dst, cam, 60, "tcp", dport, sp, syn=True, ack=True))
+                live = (live + [(dst, dport, sp)])[-3:]
+            next_try = t + rng.uniform(0.15, 0.35)
+        if live:
+            dst, dport, sp = rng.choice(live)
+            out.append(Packet(t, cam, dst, rng.randint(1200, 1400), "tcp", sp, dport, ack=True))
+            if rng.random() < 0.2:
+                out.append(Packet(t + .005, dst, cam, 60, "tcp", dport, sp, ack=True))
         t += rng.expovariate(120)
     return out
 
