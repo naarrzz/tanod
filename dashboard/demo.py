@@ -2,6 +2,8 @@
 
     python -m dashboard.demo            # build data/demo.db, make accounts, start on http://localhost:8000
     python -m dashboard.demo --reset    # rebuild the demo data (keeps the accounts)
+    python -m dashboard.demo --lan      # also HTTPS on the Wi-Fi: open https://<mac-ip>:8443/cam
+                                        # on a phone to use it as the camera
 
 While the demo runs, from a second terminal:
     python -m dashboard.demo --attack leak   # camera starts sending video to an unknown server
@@ -122,11 +124,63 @@ def ensure_accounts(path: Path) -> None:
     os.chmod(ACCOUNTS_FILE, 0o600)
 
 
+def lan_ip() -> str:
+    """This Mac's address on the Wi-Fi (no packet is sent)."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 9))
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+def make_cert(ip: str) -> tuple[str, str]:
+    """Self-signed certificate for this Mac's Wi-Fi address (phones only allow the camera on HTTPS)."""
+    import subprocess
+    d = Path("data/certs")
+    d.mkdir(parents=True, exist_ok=True)
+    key, crt, tag = d / "demo.key", d / "demo.crt", d / "ip.txt"
+    if not (crt.exists() and tag.exists() and tag.read_text() == ip):
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "365",
+                        "-keyout", str(key), "-out", str(crt), "-subj", "/CN=TANOD demo",
+                        "-addext", f"subjectAltName=IP:{ip},DNS:localhost"],
+                       check=True, capture_output=True)
+        os.chmod(key, 0o600)
+        tag.write_text(ip)
+    return str(key), str(crt)
+
+
+def serve(port: int, host: str, lan: bool, lan_port: int) -> None:
+    import asyncio
+
+    import uvicorn
+    configs = [uvicorn.Config("dashboard.app:app", host=host, port=port, log_level="warning")]
+    if lan:
+        ip = lan_ip()
+        key, crt = make_cert(ip)
+        configs.append(uvicorn.Config("dashboard.app:app", host="0.0.0.0", port=lan_port, log_level="warning",
+                                      ssl_keyfile=key, ssl_certfile=crt))
+        print(f"Phone camera: on the phone (same Wi-Fi), open  https://{ip}:{lan_port}/cam")
+        print("  The phone will warn that the certificate is not trusted; tap Show Details > visit this website.")
+        print(f"  Other devices can open the dashboard at https://{ip}:{lan_port}")
+
+    async def run():
+        await asyncio.gather(*(uvicorn.Server(c).serve() for c in configs))
+
+    asyncio.run(run())
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--reset", action="store_true", help="rebuild the demo data, then exit")
     ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8000)))
     ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--lan", action="store_true",
+                    help="also serve HTTPS on the Wi-Fi so a phone can be the camera (open /cam on it)")
+    ap.add_argument("--lan-port", type=int, default=8443)
     ap.add_argument("--attack", choices=sorted(ATTACKS), help="run a camera scenario against the running demo")
     args = ap.parse_args(argv)
 
@@ -143,13 +197,11 @@ def main(argv=None):
         return
     os.environ["TANOD_DB"] = str(DEMO_DB)
     os.environ["TANOD_DRY_RUN"] = "1"
-    import uvicorn
-    from alerts import telegram as tg
     print("Camera: " + (os.environ["TANOD_CAMERA_URL"] if os.environ.get("TANOD_CAMERA_URL")
-                        else "camera on this laptop (set TANOD_CAMERA_URL in .env for a phone app stream)"))
-    print("Telegram: " + ("on" if tg.configured() else "off (fill in .env to turn it on)"))
-    print(f"Open http://localhost:{args.port}  (Ctrl+C to stop)")
-    uvicorn.run("dashboard.app:app", host=args.host, port=args.port, log_level="warning")
+                        else "phone page (--lan) or a camera on this laptop"))
+    print("Telegram: " + ("on" if telegram.configured() else "off (fill in .env to turn it on)"))
+    print(f"Dashboard on this Mac: http://localhost:{args.port}  (Ctrl+C to stop)")
+    serve(args.port, args.host, args.lan, args.lan_port)
 
 
 if __name__ == "__main__":

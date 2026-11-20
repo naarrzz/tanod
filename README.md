@@ -85,10 +85,22 @@ The demo uses `data/demo.db` (simulated data, dry run) and creates accounts
 for narz, rod and christian the first time. Their passwords are saved in
 `data/demo_accounts.txt`, which is gitignored.
 
-**Live camera panel.** The dashboard shows the camera at the top. It uses
-`TANOD_CAMERA_URL` (an MJPEG stream from a phone camera app on the same Wi-Fi)
-if set; otherwise a camera on the laptop, which can be an iPhone through
-Continuity Camera (pick it in the dropdown under the feed). While the camera is
+**Live camera panel.** The dashboard shows the camera at the top. The easiest
+camera is a phone on the same Wi-Fi as the Mac:
+
+```bash
+.venv/bin/python -m dashboard.demo --lan   # prints https://<mac-ip>:8443/cam
+```
+
+Open that link on the phone, accept the certificate warning (it is the demo's
+own self-signed certificate in `data/certs/`), sign in, allow the camera and tap
+Start. The phone sends JPEG frames to TANOD, and the dashboard on the Mac
+(http://localhost:8000) shows them live. While the camera is quarantined, TANOD
+refuses the phone's frames and both screens say it was cut off.
+
+Other sources: `TANOD_CAMERA_URL` (an MJPEG stream from an IP camera app), or a
+camera on the laptop, which can be an iPhone through Continuity Camera (pick it
+in the dropdown under the feed). While the camera is
 quarantined, the dashboard stops relaying the stream and shows why.
 
 With the demo running, from a second terminal:

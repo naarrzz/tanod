@@ -127,3 +127,23 @@ def test_camera_status_follows_quarantine(client, monkeypatch):
 
 def test_camera_status_needs_login(client):
     assert client.get("/camera/status").status_code == 401
+
+
+JPEG = b"\xff\xd8\xff\xe0" + b"0" * 100
+
+
+def test_phone_frames_and_cutoff(client, monkeypatch):
+    monkeypatch.delenv("TANOD_CAMERA_URL", raising=False)
+    conn = client.app.state.conn
+    db.upsert_device(conn, "IP Camera", "aa:bb:cc:00:00:04", "192.168.50.20", kind="camera")
+    auth = ("owner", PW)
+    assert client.get("/camera/status", auth=auth).json()["source"] == "laptop"
+    assert "Tap Start" in client.get("/cam", auth=auth).text
+    assert client.post("/camera/frame", content=b"not a jpeg", auth=auth).status_code == 400
+    assert client.post("/camera/frame", content=JPEG, auth=auth).status_code == 200
+    assert client.get("/camera/status", auth=auth).json()["source"] == "phone"
+    db.record_event(conn, "quarantine", "192.168.50.20", "Sent video to a new address", "isolation_forest", 67.0)
+    r = client.post("/camera/frame", content=JPEG, auth=auth)
+    assert r.status_code == 503 and r.json()["isolated"]
+    assert client.get("/camera/stream", auth=auth).status_code == 503
+    assert client.post("/camera/frame", content=JPEG).status_code == 401

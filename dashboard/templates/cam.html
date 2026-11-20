@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>TANOD Camera</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:#000; color:#e5e7eb; font:16px/1.4 system-ui, -apple-system, sans-serif; }
+  .wrap { position:fixed; inset:0; display:flex; flex-direction:column; }
+  video { flex:1; width:100%; min-height:0; object-fit:cover; background:#000; }
+  .bar { display:flex; gap:10px; align-items:center; padding:12px 16px calc(12px + env(safe-area-inset-bottom)); background:#111827; }
+  .dot { width:10px; height:10px; border-radius:50%; background:#6b7280; flex:none; }
+  .live .dot { background:#ef4444; animation:blink 1s infinite; }
+  @keyframes blink { 50% { opacity:.3; } }
+  #msg { flex:1; font-size:14px; }
+  button { font:inherit; font-weight:600; border:0; border-radius:8px; padding:10px 14px; background:#1d4ed8; color:#fff; }
+  button.secondary { background:#374151; }
+  .off { position:absolute; inset:0; display:flex; flex-direction:column; gap:10px; align-items:center; justify-content:center;
+         text-align:center; padding:24px; background:#111; }
+  .off[hidden] { display:none; }
+  .off b { color:#f87171; font-size:24px; }
+  .off span { max-width:340px; font-size:15px; color:#d1d5db; }
+  .label { position:absolute; top:calc(12px + env(safe-area-inset-top)); left:12px; background:rgba(0,0,0,.5);
+           padding:5px 9px; border-radius:6px; font:600 13px/1 ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap">
+  <video id="vid" autoplay muted playsinline></video>
+  <div class="label">TANOD · {{ camera.name }} · {{ camera.ip }}</div>
+  <div class="off" id="off" hidden>
+    <b>Cut off by TANOD</b>
+    <span id="why"></span>
+    <span>This camera can no longer send video. The owner has to release it from the dashboard.</span>
+  </div>
+  <div class="bar">
+    <span class="dot"></span>
+    <span id="msg">Tap Start to use this phone as the TANOD camera.</span>
+    <button id="flip" class="secondary" hidden>Flip</button>
+    <button id="go">Start</button>
+  </div>
+</div>
+<canvas id="cv" width="640" height="360" hidden></canvas>
+<script>
+(() => {
+  const vid = document.getElementById("vid"), cv = document.getElementById("cv"), g = cv.getContext("2d");
+  const wrap = document.getElementById("wrap"), msg = document.getElementById("msg");
+  const off = document.getElementById("off"), why = document.getElementById("why");
+  const go = document.getElementById("go"), flip = document.getElementById("flip");
+  let stream = null, facing = "environment", sending = false, isolated = false, sent = 0, wake = null;
+
+  async function openCam() {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 1280 } }, audio: false });
+    vid.srcObject = stream;
+    await vid.play();
+  }
+
+  function setIsolated(on, st) {
+    isolated = on;
+    off.hidden = !on;
+    wrap.classList.toggle("live", !on && sending);
+    if (on && st) why.textContent = `${st.reason || ""}${st.since ? " · since " + st.since : ""}`;
+    msg.textContent = on ? "Cut off. Waiting for the owner to release it..." : "Live: sending video to TANOD.";
+  }
+
+  async function loop() {
+    while (sending) {
+      if (isolated) {
+        try {
+          const st = await (await fetch("/camera/status", { cache: "no-store" })).json();
+          if (!st.isolated) setIsolated(false);
+        } catch (e) {}
+        await new Promise(r => setTimeout(r, 1000));
+        continue;
+      }
+      const w = vid.videoWidth, h = vid.videoHeight;
+      if (!w) { await new Promise(r => setTimeout(r, 200)); continue; }
+      cv.width = 640; cv.height = Math.round(640 * h / w);
+      g.drawImage(vid, 0, 0, cv.width, cv.height);
+      const blob = await new Promise(r => cv.toBlob(r, "image/jpeg", 0.6));
+      try {
+        const res = await fetch("/camera/frame", { method: "POST", body: blob, headers: { "Content-Type": "image/jpeg" } });
+        if (res.status === 503) setIsolated(true, await res.json());
+        else if (res.ok) { sent++; if (sent === 1) setIsolated(false); }
+        else msg.textContent = "TANOD refused the frame (" + res.status + ").";
+      } catch (e) {
+        msg.textContent = "Cannot reach TANOD. Is the Mac on the same Wi-Fi?";
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      await new Promise(r => setTimeout(r, 120));
+    }
+  }
+
+  go.onclick = async () => {
+    if (sending) {
+      sending = false; go.textContent = "Start"; flip.hidden = true;
+      wrap.classList.remove("live"); msg.textContent = "Stopped.";
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      return;
+    }
+    try {
+      await openCam();
+      try { wake = await navigator.wakeLock?.request("screen"); } catch (e) {}
+      sending = true; go.textContent = "Stop"; flip.hidden = false;
+      setIsolated(false); loop();
+    } catch (e) {
+      msg.textContent = "No camera access: " + (e.message || e) + ". Allow the camera for this page and try again.";
+    }
+  };
+  flip.onclick = async () => { facing = facing === "environment" ? "user" : "environment"; try { await openCam(); } catch (e) {} };
+})();
+</script>
+</body>
+</html>

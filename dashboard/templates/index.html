@@ -3,7 +3,7 @@
 {% if dry_run %}<div class="banner">Dry-run mode: firewall and relay actions are logged, not applied.</div>{% endif %}
 
 {% if camera.present %}
-<section id="camera" data-isolated="{{ 1 if camera.isolated else 0 }}" data-active="{{ camera.active }}" data-proxy="{{ 1 if camera.proxy else 0 }}">
+<section id="camera" data-isolated="{{ 1 if camera.isolated else 0 }}" data-active="{{ camera.active }}" data-source="{{ camera.source }}">
   <h2 style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">Live camera
     <span class="muted" style="font-weight:400;font-size:14px">{{ camera.name }} · {{ camera.ip }}</span>
     <span id="cam-pill" class="pill {{ 'quarantined' if camera.isolated else 'normal' }}" style="margin-left:auto">{{ "cut off" if camera.isolated else "live" }}</span>
@@ -45,7 +45,7 @@
   const rec = document.getElementById("cam-rec"), clock = document.getElementById("cam-clock");
   const src = document.getElementById("cam-src"), pick = document.getElementById("cam-pick");
   const pill = document.getElementById("cam-pill"), why = document.getElementById("cam-why");
-  const proxy = box.dataset.proxy === "1";
+  let source = box.dataset.source;
   let isolated = box.dataset.isolated === "1", active = +box.dataset.active, stream = null, testTimer = null;
 
   setInterval(() => { clock.textContent = new Date().toLocaleTimeString(); }, 500);
@@ -86,10 +86,13 @@
 
   function start() {
     off.hidden = true; rec.hidden = false;
-    if (proxy) {
-      img.onerror = () => { if (!isolated) src.textContent = "Camera stream stopped. Check that the phone app is running."; };
+    if (source === "url" || source === "phone") {
+      if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+      clearInterval(testTimer); pick.hidden = true;
+      img.onerror = () => { if (!isolated) src.textContent = "Camera stream stopped."; };
       img.src = "/camera/stream?t=" + Date.now(); showOnly(img);
-      src.textContent = "Stream relayed through TANOD from the camera.";
+      src.textContent = source === "phone" ? "Live from the phone camera, sent over Wi-Fi through TANOD."
+                                           : "Stream relayed through TANOD from the camera.";
     } else if (navigator.mediaDevices) { browserCam(); } else { testPattern(); }
   }
 
@@ -113,6 +116,7 @@
         pill.className = "pill " + (isolated ? "quarantined" : "normal");
         isolated ? stop(st) : start();
       }
+      if (st.source !== source) { source = st.source; if (!isolated) start(); }
       if (st.active !== active) { active = st.active; setTimeout(refreshTables, 300); }
     } catch (e) {}
   }, 1000);
