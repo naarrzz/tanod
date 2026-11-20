@@ -109,6 +109,7 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
     app.state.conn = db.ThreadConn(db_path or os.environ.get("TANOD_DB", "data/tanod.db"))
     app.state.enforcer = enforcer or Enforcer(dry_run=os.environ.get("TANOD_DRY_RUN", "1") != "0")
     app.state.frames = {}  # camera ip -> (latest JPEG from its phone page, time received)
+    app.state.frame_owner = {}  # camera ip -> (id of the phone sending it, time of its last frame)
     app.state.frame_cond = threading.Condition()
 
     def cams_state(request) -> list[dict]:
@@ -154,7 +155,8 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
         return templates.TemplateResponse(request, "cam.html", {"camera": cam, "cameras": cams, "user": user})
 
     @app.post("/camera/frame")
-    async def camera_frame(request: Request, ip: str | None = None, _=Depends(require_owner)):
+    async def camera_frame(request: Request, ip: str | None = None, phone: str = "",
+                           _=Depends(require_owner)):
         """One JPEG frame from a phone. Refused while that camera is quarantined,
         the same way the gateway firewall would drop the camera's traffic."""
         st = one_cam(request, ip)
@@ -166,7 +168,13 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
             return JSONResponse({"isolated": False}, status_code=499)
         if not body.startswith(b"\xff\xd8") or len(body) > 2_000_000:
             raise HTTPException(400, "Send one JPEG image")
+        owners = request.app.state.frame_owner  # camera ip -> (phone id, last frame time)
         with request.app.state.frame_cond:
+            other, last = owners.get(st["ip"], ("", 0.0))
+            if phone and other and other != phone and time.time() - last < PHONE_FRESH_S:
+                # Another phone is already this camera; two phones on one camera made the feed flip.
+                return JSONResponse({"isolated": False, "busy": True, "camera": st["name"]}, status_code=409)
+            owners[st["ip"]] = (phone, time.time())
             request.app.state.frames[st["ip"]] = (body, time.time())
             request.app.state.frame_cond.notify_all()
         return JSONResponse({"isolated": False})

@@ -60,6 +60,7 @@
   const off = document.getElementById("off"), why = document.getElementById("why");
   const go = document.getElementById("go"), flip = document.getElementById("flip");
   const ip = {{ camera.ip|tojson }};
+  const phoneId = Math.random().toString(36).slice(2, 10);  // tells TANOD which phone is sending
   let stream = null, facing = "environment", sending = false, isolated = false, sent = 0, wake = null;
 
   async function openCam() {
@@ -95,9 +96,14 @@
       g.drawImage(vid, 0, 0, cv.width, cv.height);
       const blob = await new Promise(r => cv.toBlob(r, "image/jpeg", 0.6));
       try {
-        const res = await fetch("/camera/frame?ip=" + encodeURIComponent(ip), { method: "POST", body: blob, headers: { "Content-Type": "image/jpeg" } });
+        const res = await fetch("/camera/frame?ip=" + encodeURIComponent(ip) + "&phone=" + phoneId, { method: "POST", body: blob, headers: { "Content-Type": "image/jpeg" } });
         if (res.status === 503) setIsolated(true, await res.json());
-        else if (res.ok) { sent++; if (sent === 1) setIsolated(false); }
+        else if (res.status === 409) {
+          msg.textContent = {{ ("This camera is already used by another phone. Tap Change and pick another camera." if cameras|length > 1 else "This camera is already used by another phone. Stop that phone first, or start the demo with --cameras 2.")|tojson }};
+          wrap.classList.remove("live");
+          await new Promise(r => setTimeout(r, 2000));
+        }
+        else if (res.ok) { sent++; if (sent === 1 || !wrap.classList.contains("live")) setIsolated(false); }
         else msg.textContent = "TANOD refused the frame (" + res.status + ").";
       } catch (e) {
         msg.textContent = "Cannot reach TANOD. Is the Mac on the same Wi-Fi?";
