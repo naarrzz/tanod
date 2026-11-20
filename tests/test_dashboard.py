@@ -79,3 +79,29 @@ def test_password_hash_roundtrip():
     h = db.hash_password("abc12345")
     assert h.startswith("pbkdf2_sha256$") and "abc12345" not in h
     assert db.verify_password("abc12345", h) and not db.verify_password("abc12346", h)
+
+
+def test_change_password(client):
+    conn = client.app.state.conn
+    db.set_user(conn, "rod", "rod-secret-1", "Rod")
+    auth = ("rod", "rod-secret-1")
+    assert "Change password" in client.get("/password", auth=auth).text
+    bad = [
+        {"current": "wrong-pass", "new": "rod-secret-2", "again": "rod-secret-2"},
+        {"current": "rod-secret-1", "new": "short", "again": "short"},
+        {"current": "rod-secret-1", "new": "rod-secret-2", "again": "rod-secret-3"},
+    ]
+    for form in bad:
+        assert client.post("/password", data=form, auth=auth).status_code == 400
+    r = client.post("/password", data={"current": "rod-secret-1", "new": "rod-secret-2", "again": "rod-secret-2"},
+                    auth=auth)
+    assert r.status_code == 200 and "Password changed" in r.text
+    assert client.get("/", auth=auth).status_code == 401
+    assert client.get("/", auth=("rod", "rod-secret-2")).status_code == 200
+    assert [u["display_name"] for u in db.list_users(conn)] == ["Rod"]
+
+
+def test_change_password_needs_named_accounts(client):
+    r = client.post("/password", data={"current": PW, "new": "new-pass-123", "again": "new-pass-123"},
+                    auth=("owner", PW))
+    assert r.status_code == 400 and "TANOD_DASHBOARD_PASSWORD" in r.text

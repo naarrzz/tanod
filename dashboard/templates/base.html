@@ -28,12 +28,12 @@
   .banner { background:#fff7e6; border:1px solid #f3d19e; color:var(--warn); padding:8px 12px; border-radius:6px; margin-bottom:16px; }
   .error { color:var(--bad); font-weight:600; }
   pre { background:#f3f4f6; padding:12px; border-radius:6px; overflow:auto; font-size:13px; }
-  input[type=password] { padding:6px 8px; border:1px solid var(--line); border-radius:6px; font:inherit; width:100%; max-width:320px; }
+  input[type=password] { display:block; margin-top:4px;  padding:6px 8px; border:1px solid var(--line); border-radius:6px; font:inherit; width:100%; max-width:320px; }
   .table-wrap { overflow-x:auto; }
 </style>
 </head>
 <body>
-<header><a href="/">TANOD</a><span class="muted" style="color:#9ca3af">Threat Analysis and Network Observation Device</span>{% if user %}<span class="muted" style="color:#9ca3af;margin-left:auto">Signed in as {{ user }}</span>{% endif %}</header>
+<header><a href="/">TANOD</a><span class="muted" style="color:#9ca3af">Threat Analysis and Network Observation Device</span>{% if user %}<span class="muted" style="color:#9ca3af;margin-left:auto">Signed in as {{ user }} · <a href="/password" style="color:#9ca3af;font-weight:400;text-decoration:underline">Change password</a></span>{% endif %}</header>
 <main>
 {% block content %}{% endblock %}
 </main>

@@ -127,6 +127,36 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
                         target_mac=(dev["mac"] if dev else ev["target_mac"]))
         return RedirectResponse("/", status_code=303)
 
+    def _pw_page(request, user, error=None, done=False, status=200):
+        named = bool(db.list_users(request.app.state.conn))
+        return templates.TemplateResponse(request, "password.html", {
+            "user": user, "error": error, "done": done, "named": named}, status_code=status)
+
+    @app.get("/password", response_class=HTMLResponse)
+    def password_form(request: Request, user: str = Depends(require_owner)):
+        return _pw_page(request, user)
+
+    @app.post("/password", response_class=HTMLResponse)
+    def change_password(request: Request, current: str = Form(""), new: str = Form(""), again: str = Form(""),
+                        user: str = Depends(require_owner)):
+        conn = request.app.state.conn
+        error = None
+        if not db.list_users(conn):
+            error = "The built-in owner password comes from TANOD_DASHBOARD_PASSWORD. Add named accounts first."
+        elif not authenticate(conn, user, current):
+            error = "Current password is wrong."
+        elif len(new) < 8:
+            error = "Use at least 8 characters."
+        elif new != again:
+            error = "The new passwords do not match."
+        elif new == current:
+            error = "The new password is the same as the current one."
+        if error:
+            return _pw_page(request, user, error=error, status=400)
+        name = next((u["display_name"] for u in db.list_users(conn) if u["username"] == user), user)
+        db.set_user(conn, user, new, name)
+        return _pw_page(request, user, done=True)
+
     return app
 
 

@@ -70,6 +70,10 @@ signed-in user's password again.
 .venv/bin/python -m dashboard.users list
 ```
 
+Each person can change their own password from the dashboard (Change password
+link beside their name). Running `users add` again on an existing username also
+sets a new password.
+
 ### Presentation demo
 
 ```bash
