@@ -6,6 +6,7 @@ import hmac
 import json
 import secrets
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -44,10 +45,32 @@ CREATE TABLE IF NOT EXISTS users (
 
 def connect(path: str | Path) -> sqlite3.Connection:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), check_same_thread=False)
+    conn = sqlite3.connect(str(path), check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")  # readers do not block the writer
     conn.executescript(SCHEMA)
     return conn
+
+
+class ThreadConn:
+    """One SQLite connection per thread, used like a connection.
+
+    The dashboard serves many requests at once (camera streams, phone frames,
+    status checks), and one shared sqlite3 connection is not safe for that."""
+
+    def __init__(self, path: str | Path):
+        self.path = path
+        self._local = threading.local()
+        self._get()  # create the file and tables now
+
+    def _get(self) -> sqlite3.Connection:
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = self._local.conn = connect(self.path)
+        return c
+
+    def __getattr__(self, name):
+        return getattr(self._get(), name)
 
 
 def upsert_device(conn, name, mac, ip, kind="esp32", relay_channel=None, relay_cutoff_enabled=False) -> int:

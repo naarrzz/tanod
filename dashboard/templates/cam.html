@@ -90,7 +90,8 @@
       }
       const w = vid.videoWidth, h = vid.videoHeight;
       if (!w) { await new Promise(r => setTimeout(r, 200)); continue; }
-      cv.width = 640; cv.height = Math.round(640 * h / w);
+      const k = 720 / Math.max(w, h);  // keep portrait or landscape as the phone holds it
+      cv.width = Math.round(w * k); cv.height = Math.round(h * k);
       g.drawImage(vid, 0, 0, cv.width, cv.height);
       const blob = await new Promise(r => cv.toBlob(r, "image/jpeg", 0.6));
       try {

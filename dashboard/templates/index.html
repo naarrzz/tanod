@@ -23,15 +23,16 @@
       <canvas width="640" height="360" hidden></canvas>
       <div class="cam-rec">● REC <span class="cam-clock"></span></div>
       <div class="cam-off cam-cut" {% if not c.isolated %}hidden{% endif %}>
-        <b>Camera cut off by TANOD</b>
-        <span class="cam-why">{{ c.reason or "" }}{% if c.since %} · since {{ c.since }}{% endif %}</span>
-        <span>The camera can no longer send video anywhere until the owner releases it.</span>
+        <b>CUT OFF BY TANOD</b>
+        <span class="cam-when">{% if c.since %}since {{ c.since }}{% endif %}{% if c.risk is not none %} · risk {{ c.risk|round|int }}{% endif %}</span>
       </div>
       <div class="cam-off cam-wait" hidden>
-        <b style="color:#e5e7eb">Waiting for video</b>
-        <span>Open <code>/cam?ip={{ c.ip }}</code> on the phone for this camera (run the demo with --lan) and tap Start.</span>
+        <b class="wait">Waiting for video</b>
+        <span>On the phone: open /cam and pick {{ c.name }}</span>
       </div>
     </div>
+    <p class="cam-why" {% if not c.isolated %}hidden{% endif %}><b>Why:</b> <span>{{ c.reason or "" }}</span>
+      The camera cannot send video until the owner releases it.</p>
     <p class="muted cam-foot"><span class="cam-src"></span> <select class="cam-pick" hidden></select></p>
   </div>
   {% endfor %}
@@ -43,17 +44,20 @@
   .cam-tile[hidden] { display:none; }
   .cam-head { display:flex; gap:8px; align-items:baseline; margin-bottom:8px; flex-wrap:wrap; }
   .cam-head .pill { margin-left:auto; }
-  .cam-box { position:relative; background:#000; border-radius:6px; overflow:hidden; aspect-ratio:16/9; }
+  .cam-box { position:relative; background:#000; border-radius:6px; overflow:hidden; aspect-ratio:16/9;
+             max-height:70vh; margin:0 auto; container-type:size; }
   .cam-box [hidden] { display:none !important; }
-  .cam-box img, .cam-box video, .cam-box canvas { width:100%; height:100%; object-fit:cover; display:block; }
+  .cam-box img, .cam-box video, .cam-box canvas { width:100%; height:100%; object-fit:contain; display:block; }
   .cam-rec { position:absolute; top:10px; left:12px; color:#ff4d4d; font:600 13px/1 ui-monospace, monospace;
              background:rgba(0,0,0,.45); padding:5px 8px; border-radius:4px; }
   .cam-rec span { color:#fff; }
-  .cam-off { position:absolute; inset:0; display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center;
-             text-align:center; padding:16px; background:#111; color:#e5e7eb; }
-  .cam-off b { color:#f87171; font-size:18px; }
-  .cam-off span { max-width:480px; font-size:14px; }
-  .cam-off code { background:#1f2937; padding:1px 5px; border-radius:4px; }
+  .cam-off { position:absolute; inset:0; display:flex; flex-direction:column; gap:4px; align-items:center; justify-content:center;
+             text-align:center; padding:8px; background:repeating-linear-gradient(135deg,#1a1a1a 0 12px,#141414 12px 24px); color:#e5e7eb; }
+  .cam-off b { color:#f87171; font-size:clamp(13px, 7cqw, 26px); letter-spacing:.04em; }
+  .cam-off b.wait { color:#e5e7eb; }
+  .cam-off span { font-size:clamp(11px, 3.6cqw, 15px); color:#d1d5db; }
+  .cam-why { margin:8px 0 0; padding:8px 10px; border-radius:6px; background:#fde8e7; color:#7f1d1d; font-size:13px; line-height:1.4; }
+  .cam-why[hidden] { display:none; }
   .cam-foot { margin:8px 0 0; font-size:13px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 </style>
 <script>
@@ -65,7 +69,7 @@
   function tile(el) {
     const q = s => el.querySelector(s);
     const img = q("img"), vid = q("video"), test = q("canvas"), rec = q(".cam-rec");
-    const cut = q(".cam-cut"), wait = q(".cam-wait"), why = q(".cam-why"), src = q(".cam-src"), pick = q(".cam-pick");
+    const cut = q(".cam-cut"), wait = q(".cam-wait"), why = q(".cam-why"), whyText = q(".cam-why span"), when = q(".cam-when"), box = q(".cam-box"), src = q(".cam-src"), pick = q(".cam-pick");
     const pill = q(".cam-pill"), ip = el.dataset.ip;
     let st = { source: el.dataset.source, live: el.dataset.live === "1", isolated: el.dataset.isolated === "1" };
     let stream = null, testTimer = null, shown = null;
@@ -111,7 +115,11 @@
       pill.textContent = st.isolated ? "cut off" : want === "wait" ? "no video" : "live";
       pill.className = "pill cam-pill " + (st.isolated ? "quarantined" : want === "wait" ? "" : "normal");
       cut.hidden = want !== "cut"; wait.hidden = want !== "wait"; rec.hidden = want === "cut" || want === "wait";
-      if (st.isolated && st.reason) why.textContent = `${st.reason} · since ${st.since}` + (st.risk != null ? ` · risk ${Math.round(st.risk)}` : "");
+      why.hidden = !st.isolated;
+      if (st.isolated) {
+        whyText.textContent = st.reason || "";
+        when.textContent = `since ${st.since}` + (st.risk != null ? ` · risk ${Math.round(st.risk)}` : "");
+      }
       if (want === shown) return;
       shown = want; stopAll(); pick.hidden = true;
       if (want === "laptop") { navigator.mediaDevices ? laptopCam() : testPattern(); }
@@ -121,6 +129,15 @@
         src.textContent = want === "phone" ? "Live from a phone camera, sent over Wi-Fi through TANOD." : "Stream relayed through TANOD from the camera.";
       } else src.textContent = "";
     }
+    // Fit the tile to the video: portrait phones get a tall tile, landscape a wide one.
+    function fit() {
+      const w = !img.hidden ? img.naturalWidth : !vid.hidden ? vid.videoWidth : 0;
+      const h = !img.hidden ? img.naturalHeight : !vid.hidden ? vid.videoHeight : 0;
+      box.style.aspectRatio = w && h ? `${w} / ${h}` : "16 / 9";
+      box.style.width = w && h && h > w ? "auto" : "";
+      box.style.height = w && h && h > w ? "min(70vh, 520px)" : "";
+    }
+    setInterval(fit, 1000); img.onload = fit; vid.onloadedmetadata = fit;
     render();
     return { ip, update(n) { if (n) st = n; render(); } };
   }

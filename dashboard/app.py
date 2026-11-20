@@ -32,6 +32,7 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
+from starlette.requests import ClientDisconnect
 
 from alerts import telegram
 from gateway.enforce import Enforcer
@@ -105,7 +106,7 @@ def camera_state(conn, cam, phone_ts: float = 0.0, first: bool = True) -> dict:
 
 def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> FastAPI:
     app = FastAPI(title="TANOD Dashboard")
-    app.state.conn = db.connect(db_path or os.environ.get("TANOD_DB", "data/tanod.db"))
+    app.state.conn = db.ThreadConn(db_path or os.environ.get("TANOD_DB", "data/tanod.db"))
     app.state.enforcer = enforcer or Enforcer(dry_run=os.environ.get("TANOD_DRY_RUN", "1") != "0")
     app.state.frames = {}  # camera ip -> (latest JPEG from its phone page, time received)
     app.state.frame_cond = threading.Condition()
@@ -157,7 +158,10 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
         st = one_cam(request, ip)
         if st["isolated"]:
             return JSONResponse({"isolated": True, "reason": st["reason"], "since": st["since"]}, status_code=503)
-        body = await request.body()
+        try:
+            body = await request.body()
+        except ClientDisconnect:  # the phone gave up on this frame (weak Wi-Fi); the next one follows
+            return JSONResponse({"isolated": False}, status_code=499)
         if not body.startswith(b"\xff\xd8") or len(body) > 2_000_000:
             raise HTTPException(400, "Send one JPEG image")
         with request.app.state.frame_cond:
