@@ -206,8 +206,9 @@ def serve(port: int, host: str, lan: bool, lan_port: int, buttons: bool = False)
                                  f"Stop it with Ctrl+C in its terminal (or: kill $(lsof -tiTCP:{p} -sTCP:LISTEN)), "
                                  "then run this again.")
     configs = [uvicorn.Config("dashboard.app:app", host=host, port=port, log_level="warning")]
+    # Every camera is a phone (or TANOD_CAMERA_URL); the demo never uses this computer's own camera.
+    os.environ["TANOD_PHONE_CAMERA"] = "1"
     if lan:
-        os.environ["TANOD_PHONE_CAMERA"] = "1"  # every camera is a phone; never fall back to the laptop camera
         ip = lan_ip()
         key, crt = make_cert(ip)
         os.environ["TANOD_LAN_URL"] = f"https://{ip}:{lan_port}"
@@ -257,7 +258,7 @@ def main(argv=None):
     os.environ["TANOD_DB"] = str(DEMO_DB)
     os.environ["TANOD_DRY_RUN"] = "1"
     print("Camera: " + (os.environ["TANOD_CAMERA_URL"] if os.environ.get("TANOD_CAMERA_URL")
-                        else "phone page (--lan) or a camera on this laptop"))
+                        else "phones on the /cam page (start with --lan); this laptop's camera is not used"))
     print("Telegram: " + ("on" if telegram.configured() else "off (fill in .env to turn it on)"))
     print(f"Dashboard on this Mac: http://localhost:{args.port}  (Ctrl+C to stop)")
     serve(args.port, args.host, args.lan, args.lan_port, args.buttons)
