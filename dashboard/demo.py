@@ -136,7 +136,8 @@ def run_attack(path: Path, which: str, camera: int = 1) -> None:
         dev = db.device_by_ip(conn, act.target)
         new = (act.evidence or {}).get("new_destinations") or []
         if act.kind == "quarantine" and new:
-            act.reason += f"; it started sending data to a new address ({', '.join(map(str, new[:2]))})"
+            act.reason += (f"; it started sending data to new addresses ({', '.join(map(str, new[:2]))})" if len(new) > 1
+                           else f"; it started sending data to a new address ({new[0]})")
         enforcer.quarantine(reg.get(act.target)) if act.kind == "quarantine" else enforcer.block(act.target)
         db.record_event(conn, act.kind, act.target, act.reason, act.source, act.risk, act.evidence,
                         target_mac=dev["mac"] if dev else None)
