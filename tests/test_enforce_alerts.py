@@ -73,3 +73,23 @@ def test_parse_suricata_eve_alert():
     a = parse_eve_line(line)
     assert a.priority == 1 and a.src == "192.168.50.99" and a.sid == 2001
     assert parse_eve_line(json.dumps({"event_type": "flow"})) is None
+
+
+def test_notify_skips_without_bot(monkeypatch):
+    from alerts import telegram
+    monkeypatch.delenv("TANOD_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TANOD_CHAT_ID", raising=False)
+    assert not telegram.configured()
+    assert "skipped" in telegram.notify("quarantine", "IP Camera", "192.168.50.20", "test")
+
+
+def test_release_message_and_env_file(tmp_path, monkeypatch):
+    from alerts import telegram
+    msg = telegram.build_message("release", "IP Camera", "192.168.50.20", "Released by narz")
+    assert msg.startswith("TANOD: IP Camera (192.168.50.20) was reconnected")
+    monkeypatch.setenv("TANOD_CHAT_ID", "0")
+    monkeypatch.delenv("TANOD_CHAT_ID")  # restored after the test
+    (tmp_path / ".env").write_text("# comment\nTANOD_CHAT_ID='12345'\n")
+    telegram.load_env(str(tmp_path / ".env"))
+    import os
+    assert os.environ["TANOD_CHAT_ID"] == "12345"

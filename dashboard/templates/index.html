@@ -2,6 +2,134 @@
 {% block content %}
 {% if dry_run %}<div class="banner">Dry-run mode: firewall and relay actions are logged, not applied.</div>{% endif %}
 
+{% if camera.present %}
+<section id="camera" data-isolated="{{ 1 if camera.isolated else 0 }}" data-active="{{ camera.active }}" data-proxy="{{ 1 if camera.proxy else 0 }}">
+  <h2 style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">Live camera
+    <span class="muted" style="font-weight:400;font-size:14px">{{ camera.name }} · {{ camera.ip }}</span>
+    <span id="cam-pill" class="pill {{ 'quarantined' if camera.isolated else 'normal' }}" style="margin-left:auto">{{ "cut off" if camera.isolated else "live" }}</span>
+  </h2>
+  <div class="cam-box">
+    <img id="cam-img" alt="Camera feed" hidden>
+    <video id="cam-vid" autoplay muted playsinline hidden></video>
+    <canvas id="cam-test" width="640" height="360" hidden></canvas>
+    <div id="cam-rec" class="cam-rec">● REC <span id="cam-clock"></span></div>
+    <div id="cam-off" class="cam-off" {% if not camera.isolated %}hidden{% endif %}>
+      <b>Camera cut off by TANOD</b>
+      <span id="cam-why">{{ camera.reason or "" }}{% if camera.since %} · since {{ camera.since }}{% endif %}</span>
+      <span>The camera can no longer send video anywhere until the owner releases it.</span>
+    </div>
+  </div>
+  <p class="muted" style="margin:8px 0 0;font-size:13px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <span id="cam-src"></span>
+    <select id="cam-pick" hidden style="font:inherit;font-size:13px"></select>
+  </p>
+</section>
+<style>
+  .cam-box { position:relative; background:#000; border-radius:6px; overflow:hidden; aspect-ratio:16/9; max-height:420px; }
+  .cam-box img, .cam-box video, .cam-box canvas { width:100%; height:100%; object-fit:cover; display:block; }
+  .cam-box [hidden] { display:none !important; }
+  .cam-rec { position:absolute; top:10px; left:12px; color:#fff; font:600 13px/1 ui-monospace, monospace;
+             background:rgba(0,0,0,.45); padding:5px 8px; border-radius:4px; }
+  .cam-rec { color:#ff4d4d; } .cam-rec span { color:#fff; }
+  .cam-off { position:absolute; inset:0; display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center;
+             text-align:center; padding:16px; background:#111; color:#e5e7eb; }
+  .cam-off[hidden] { display:none; }
+  .cam-off b { color:#f87171; font-size:20px; }
+  .cam-off span { max-width:520px; font-size:14px; }
+</style>
+<script>
+(() => {
+  const box = document.getElementById("camera");
+  const img = document.getElementById("cam-img"), vid = document.getElementById("cam-vid");
+  const test = document.getElementById("cam-test"), off = document.getElementById("cam-off");
+  const rec = document.getElementById("cam-rec"), clock = document.getElementById("cam-clock");
+  const src = document.getElementById("cam-src"), pick = document.getElementById("cam-pick");
+  const pill = document.getElementById("cam-pill"), why = document.getElementById("cam-why");
+  const proxy = box.dataset.proxy === "1";
+  let isolated = box.dataset.isolated === "1", active = +box.dataset.active, stream = null, testTimer = null;
+
+  setInterval(() => { clock.textContent = new Date().toLocaleTimeString(); }, 500);
+
+  function showOnly(el) { [img, vid, test].forEach(e => e.hidden = e !== el); }
+
+  function testPattern() {
+    showOnly(test);
+    src.textContent = "No camera found: showing a test pattern.";
+    const g = test.getContext("2d"); let x = 0;
+    clearInterval(testTimer);
+    testTimer = setInterval(() => {
+      const bars = ["#c0c0c0","#c0c000","#00c0c0","#00c000","#c000c0","#c00000","#0000c0"];
+      bars.forEach((c, i) => { g.fillStyle = c; g.fillRect(i * 640 / 7, 0, 640 / 7 + 1, 360); });
+      g.fillStyle = "rgba(0,0,0,.6)"; g.fillRect(0, 300, 640, 60);
+      g.fillStyle = "#fff"; g.font = "bold 22px monospace"; g.fillText("TANOD TEST PATTERN", 20, 338);
+      g.fillRect((x = (x + 6) % 640), 290, 40, 6);
+    }, 100);
+  }
+
+  async function browserCam(deviceId) {
+    try {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      let saved = null; try { saved = localStorage.getItem("tanod-cam"); } catch (e) {}
+      const want = deviceId || saved;
+      stream = await navigator.mediaDevices.getUserMedia({ video: want ? { deviceId: { ideal: want } } : true, audio: false });
+      vid.srcObject = stream; showOnly(vid);
+      const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+      const current = stream.getVideoTracks()[0].getSettings().deviceId;
+      const phone = cams.find(c => /iphone|phone|continuity/i.test(c.label));
+      if (!want && phone && phone.deviceId !== current) return browserCam(phone.deviceId);
+      pick.innerHTML = cams.map(c => `<option value="${c.deviceId}" ${c.deviceId === current ? "selected" : ""}>${c.label || "Camera"}</option>`).join("");
+      pick.hidden = cams.length < 2;
+      src.textContent = "Camera on this laptop.";
+    } catch (e) { testPattern(); }
+  }
+  pick.onchange = () => { try { localStorage.setItem("tanod-cam", pick.value); } catch (e) {} if (!isolated) browserCam(pick.value); };
+
+  function start() {
+    off.hidden = true; rec.hidden = false;
+    if (proxy) {
+      img.onerror = () => { if (!isolated) src.textContent = "Camera stream stopped. Check that the phone app is running."; };
+      img.src = "/camera/stream?t=" + Date.now(); showOnly(img);
+      src.textContent = "Stream relayed through TANOD from the camera.";
+    } else if (navigator.mediaDevices) { browserCam(); } else { testPattern(); }
+  }
+
+  function stop(st) {
+    img.removeAttribute("src");
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    clearInterval(testTimer);
+    [img, vid, test].forEach(e => e.hidden = true);
+    rec.hidden = true; off.hidden = false;
+    if (st) why.textContent = `${st.reason || ""} · since ${st.since}` + (st.risk != null ? ` · risk ${Math.round(st.risk)}` : "");
+  }
+
+  isolated ? stop() : start();
+
+  setInterval(async () => {
+    try {
+      const st = await (await fetch("/camera/status", { cache: "no-store" })).json();
+      if (st.isolated !== isolated) {
+        isolated = st.isolated;
+        pill.textContent = isolated ? "cut off" : "live";
+        pill.className = "pill " + (isolated ? "quarantined" : "normal");
+        isolated ? stop(st) : start();
+      }
+      if (st.active !== active) { active = st.active; setTimeout(refreshTables, 300); }
+    } catch (e) {}
+  }, 1000);
+
+  // Update the tables below without reloading, so the camera keeps running.
+  async function refreshTables() {
+    const html = await (await fetch("/", { cache: "no-store" })).text();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    document.querySelectorAll("main > section:not(#camera)").forEach((sec, i) => {
+      const fresh = doc.querySelectorAll("main > section:not(#camera)")[i];
+      if (fresh) sec.innerHTML = fresh.innerHTML;
+    });
+  }
+})();
+</script>
+{% endif %}
+
 <section>
   <h2>Devices</h2>
   <div class="table-wrap"><table>

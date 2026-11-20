@@ -85,6 +85,36 @@ The demo uses `data/demo.db` (simulated data, dry run) and creates accounts
 for narz, rod and christian the first time. Their passwords are saved in
 `data/demo_accounts.txt`, which is gitignored.
 
+**Live camera panel.** The dashboard shows the camera at the top. It uses
+`TANOD_CAMERA_URL` (an MJPEG stream from a phone camera app on the same Wi-Fi)
+if set; otherwise a camera on the laptop, which can be an iPhone through
+Continuity Camera (pick it in the dropdown under the feed). While the camera is
+quarantined, the dashboard stops relaying the stream and shows why.
+
+With the demo running, from a second terminal:
+
+```bash
+.venv/bin/python -m dashboard.demo --attack leak   # camera sends its video to an unknown server -> camera cut off
+.venv/bin/python -m dashboard.demo --attack scan   # outside laptop scans the camera -> attacker blocked, feed stays
+```
+
+Both run simulated traffic through the trained models and the real decision
+logic. `leak` is an exhibit scenario only: in the thesis tests the camera is
+an attack target and is never put in hacked mode. Release the camera from the
+dashboard to bring the feed back.
+
+**Real Telegram alerts (exhibit, normal network only).** Copy `.env.example`
+to `.env` (gitignored), create a bot with @BotFather, put its token in
+`TANOD_BOT_TOKEN`, send the bot a message (or add it to the group chat), then:
+
+```bash
+.venv/bin/python -m alerts.telegram chats   # prints the chat id to put in TANOD_CHAT_ID
+.venv/bin/python -m alerts.telegram test    # sends one test alert
+```
+
+After that, `--attack` and every Release send a Telegram message. During the
+isolated thesis trials, keep using the local mock below instead.
+
 Alerts go to a local stand-in for the Telegram API. In another terminal:
 
 ```bash
@@ -103,6 +133,7 @@ with their arrival time in `data/alerts_received.jsonl` (for T11).
 | `TANOD_DRY_RUN` | `1` | `0` runs nft/conntrack commands for real (Pi, root) |
 | `TANOD_ALERT_ENDPOINT` | `http://127.0.0.1:8081` | Telegram-format endpoint |
 | `TANOD_BOT_TOKEN`, `TANOD_CHAT_ID` | test values | Real values only for the separate Telegram check |
+| `TANOD_CAMERA_URL` | unset | MJPEG stream shown on the dashboard |
 
 ## What the simulation shows (synthetic data, not results)
 

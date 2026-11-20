@@ -105,3 +105,25 @@ def test_change_password_needs_named_accounts(client):
     r = client.post("/password", data={"current": PW, "new": "new-pass-123", "again": "new-pass-123"},
                     auth=("owner", PW))
     assert r.status_code == 400 and "TANOD_DASHBOARD_PASSWORD" in r.text
+
+
+def test_camera_status_follows_quarantine(client, monkeypatch):
+    conn = client.app.state.conn
+    db.upsert_device(conn, "IP Camera", "aa:bb:cc:00:00:04", "192.168.50.20", kind="camera")
+    auth = ("owner", PW)
+    st = client.get("/camera/status", auth=auth).json()
+    assert st["present"] and not st["isolated"]
+    assert "Live camera" in client.get("/", auth=auth).text
+    monkeypatch.delenv("TANOD_CAMERA_URL", raising=False)
+    assert client.get("/camera/stream", auth=auth).status_code == 404
+    db.record_event(conn, "quarantine", "192.168.50.20", "Sent video to a new address", "isolation_forest", 67.0)
+    st = client.get("/camera/status", auth=auth).json()
+    assert st["isolated"] and st["reason"] == "Sent video to a new address"
+    monkeypatch.setenv("TANOD_CAMERA_URL", "http://127.0.0.1:9/video")
+    assert client.get("/camera/stream", auth=auth).status_code == 503
+    db.mark_released(conn, "192.168.50.20")
+    assert not client.get("/camera/status", auth=auth).json()["isolated"]
+
+
+def test_camera_status_needs_login(client):
+    assert client.get("/camera/status").status_code == 401

@@ -27,6 +27,7 @@ GATEWAY = "192.168.50.1"
 ATTACKER = "192.168.50.99"  # unregistered client with a leaked passphrase
 UNKNOWN_SERVER = "10.10.0.66"
 C2_SERVER = "10.10.0.99"
+LEAK_SERVER = "10.10.0.77"  # exhibit scenario: where a hijacked camera would send its video
 
 
 # ---- normal traffic ------------------------------------------------------
@@ -120,6 +121,21 @@ def t8_beacon(rng, node, t0, dur=12.0):
                 Packet(t + .01, C2_SERVER, node, 60, "tcp", 4444, sp, syn=True, ack=True),
                 Packet(t + .02, node, C2_SERVER, 90, "tcp", sp, 4444, ack=True)]
         t += 1.0
+    return out
+
+
+def camera_leak(rng, cam, t0, dur=10.0):
+    """Exhibit scenario (not one of the six thesis tests): the camera starts
+    sending a second copy of its video to an unknown server."""
+    out, t = [], t0
+    sp = rng.randint(30000, 60000)
+    out += [Packet(t0, cam, LEAK_SERVER, 60, "tcp", sp, 8554, syn=True),
+            Packet(t0 + .01, LEAK_SERVER, cam, 60, "tcp", 8554, sp, syn=True, ack=True)]
+    while t < t0 + dur:
+        out.append(Packet(t, cam, LEAK_SERVER, rng.randint(1200, 1400), "tcp", sp, 8554, ack=True))
+        if rng.random() < 0.2:
+            out.append(Packet(t + .005, LEAK_SERVER, cam, 60, "tcp", 8554, sp, ack=True))
+        t += rng.expovariate(120)
     return out
 
 

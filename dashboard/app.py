@@ -12,6 +12,8 @@ Env:
   TANOD_DB                 SQLite path, default data/tanod.db
   TANOD_DASHBOARD_PASSWORD dashboard password (dev default "tanod-dev", change it)
   TANOD_DRY_RUN            "1" (default) logs nft commands only; "0" runs them (Pi, root)
+  TANOD_CAMERA_URL         optional MJPEG stream of the camera, shown on the dashboard and
+                           cut off while the camera is quarantined
 """
 from __future__ import annotations
 
@@ -20,14 +22,17 @@ import json
 import logging
 import os
 import secrets
+import time
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 
+from alerts import telegram
 from gateway.enforce import Enforcer
 
 from . import db
@@ -69,6 +74,19 @@ def require_owner(request: Request, creds: HTTPBasicCredentials = Depends(securi
     return creds.username.lower()
 
 
+def camera_state(conn) -> dict:
+    """The camera device and whether TANOD has it cut off right now."""
+    cam = conn.execute("SELECT * FROM devices WHERE kind='camera' ORDER BY id LIMIT 1").fetchone()
+    if not cam:
+        return {"present": False, "isolated": False}
+    ev = next((e for e in db.active_responses(conn) if e["target_ip"] == cam["ip"]), None)
+    return {"present": True, "name": cam["name"], "ip": cam["ip"], "isolated": ev is not None,
+            "since": datetime.fromtimestamp(ev["ts"]).strftime("%H:%M:%S") if ev else None,
+            "reason": ev["reason"] if ev else None, "risk": ev["risk"] if ev else None,
+            "active": len(db.active_responses(conn)),
+            "proxy": bool(os.environ.get("TANOD_CAMERA_URL"))}
+
+
 def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> FastAPI:
     app = FastAPI(title="TANOD Dashboard")
     app.state.conn = db.connect(db_path or os.environ.get("TANOD_DB", "data/tanod.db"))
@@ -83,7 +101,45 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
             "events": db.list_events(conn, 30),
             "dry_run": request.app.state.enforcer.dry_run,
             "user": user,
+            "camera": camera_state(conn),
         })
+
+    @app.get("/camera/status")
+    def camera_status(request: Request, _=Depends(require_owner)):
+        return JSONResponse(camera_state(request.app.state.conn))
+
+    @app.get("/camera/stream")
+    def camera_stream(request: Request, _=Depends(require_owner)):
+        """Relay the camera's MJPEG stream; it stops the moment the camera is quarantined,
+        the same way the gateway firewall would cut the camera off."""
+        conn = request.app.state.conn
+        url = os.environ.get("TANOD_CAMERA_URL")
+        if not url:
+            raise HTTPException(404, "TANOD_CAMERA_URL is not set")
+        if camera_state(conn)["isolated"]:
+            raise HTTPException(503, "Camera is isolated by TANOD")
+        try:
+            upstream = urllib.request.urlopen(url, timeout=5)
+        except OSError as e:
+            raise HTTPException(502, f"Camera not reachable: {e}")
+
+        def relay():
+            checked = 0.0
+            try:
+                while True:
+                    if time.time() - checked > 0.5:
+                        checked = time.time()
+                        if camera_state(conn)["isolated"]:
+                            break
+                    chunk = upstream.read(16384)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                upstream.close()
+
+        ctype = upstream.headers.get("Content-Type", "multipart/x-mixed-replace")
+        return StreamingResponse(relay(), media_type=ctype, headers={"Cache-Control": "no-store"})
 
     @app.get("/events/{event_id}", response_class=HTMLResponse)
     def event_detail(event_id: int, request: Request, _=Depends(require_owner)):
@@ -125,6 +181,8 @@ def create_app(db_path: str | None = None, enforcer: Enforcer | None = None) -> 
         db.mark_released(conn, target)
         db.record_event(conn, "release", target, f"Released by {user}", "owner",
                         target_mac=(dev["mac"] if dev else ev["target_mac"]))
+        log.info(telegram.notify("release", dev["name"] if dev else "Unregistered client", target,
+                                 f"Released by {user} from the dashboard"))
         return RedirectResponse("/", status_code=303)
 
     def _pw_page(request, user, error=None, done=False, status=200):
