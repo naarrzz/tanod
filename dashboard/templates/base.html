@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TANOD Dashboard</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --muted:#5b6470; --line:#dde1e6;
+          --ok:#1f7a3a; --bad:#b42318; --warn:#a15c00; --accent:#1d4ed8; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:#111827; color:#fff; padding:12px 16px; display:flex; gap:12px; align-items:baseline; }
+  header a { color:#fff; text-decoration:none; font-weight:700; }
+  main { max-width:1000px; margin:0 auto; padding:16px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; }
+  h2 { margin:0 0 12px; font-size:17px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:13px; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:99px; font-size:12px; font-weight:600; }
+  .normal { background:#e6f4ea; color:var(--ok); }
+  .quarantined, .quarantine, .block { background:#fde8e7; color:var(--bad); }
+  .release { background:#e8eefc; color:var(--accent); }
+  .btn { display:inline-block; padding:6px 12px; border-radius:6px; background:var(--bad); color:#fff;
+         text-decoration:none; border:0; font:inherit; cursor:pointer; }
+  .btn.secondary { background:#e5e7eb; color:var(--ink); }
+  .muted { color:var(--muted); }
+  .banner { background:#fff7e6; border:1px solid #f3d19e; color:var(--warn); padding:8px 12px; border-radius:6px; margin-bottom:16px; }
+  .error { color:var(--bad); font-weight:600; }
+  pre { background:#f3f4f6; padding:12px; border-radius:6px; overflow:auto; font-size:13px; }
+  input[type=password] { padding:6px 8px; border:1px solid var(--line); border-radius:6px; font:inherit; width:100%; max-width:320px; }
+  .table-wrap { overflow-x:auto; }
+</style>
+</head>
+<body>
+<header><a href="/">TANOD</a><span class="muted" style="color:#9ca3af">Threat Analysis and Network Observation Device</span></header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

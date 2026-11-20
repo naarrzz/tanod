@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block content %}
+{% if dry_run %}<div class="banner">Dry-run mode: firewall and relay actions are logged, not applied.</div>{% endif %}
+
+<section>
+  <h2>Devices</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Name</th><th>Type</th><th>IP / MAC</th><th>Status</th><th>Last risk</th><th>Relay cutoff</th><th></th></tr>
+    {% for d in devices %}
+    <tr>
+      <td>{{ d.name }}</td>
+      <td>{{ d.kind }}</td>
+      <td>{{ d.ip }}<br><span class="muted">{{ d.mac }}</span></td>
+      <td><span class="pill {{ d.status }}">{{ d.status }}</span></td>
+      <td>{{ d.last_risk if d.last_risk is not none else "" }}</td>
+      <td>{{ "on (ch " ~ d.relay_channel ~ ")" if d.relay_cutoff_enabled else "off" }}</td>
+      <td>{% if d.status == "quarantined" %}<a class="btn" href="/release/{{ d.ip }}">Release</a>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="muted">No registered devices yet. Run: python -m dashboard.seed</td></tr>
+    {% endfor %}
+  </table></div>
+</section>
+
+<section>
+  <h2>Blocked and quarantined now</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Since</th><th>Action</th><th>Target</th><th>Reason</th><th></th></tr>
+    {% for e in active %}
+    <tr>
+      <td>{{ e.ts|ts }}</td>
+      <td><span class="pill {{ e.kind }}">{{ e.kind }}</span></td>
+      <td>{{ e.device_name or "Unregistered client" }}<br><span class="muted">{{ e.target_ip }}</span></td>
+      <td>{{ e.reason }} <a href="/events/{{ e.id }}">evidence</a></td>
+      <td><a class="btn" href="/release/{{ e.target_ip }}">Release</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="muted">Nothing is blocked.</td></tr>
+    {% endfor %}
+  </table></div>
+</section>
+
+<section>
+  <h2>Recent events</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Time</th><th>Event</th><th>Target</th><th>Source</th><th>Risk</th><th>Reason</th></tr>
+    {% for e in events %}
+    <tr>
+      <td>{{ e.ts|ts }}</td>
+      <td><span class="pill {{ e.kind }}">{{ e.kind }}</span></td>
+      <td>{{ e.device_name or e.target_ip }}</td>
+      <td>{{ e.source }}</td>
+      <td>{{ e.risk if e.risk is not none else "" }}</td>
+      <td><a href="/events/{{ e.id }}">{{ e.reason }}</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">No events yet.</td></tr>
+    {% endfor %}
+  </table></div>
+</section>
+{% endblock %}

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+  <h2>Event #{{ e.id }} <span class="pill {{ e.kind }}">{{ e.kind }}</span></h2>
+  <p><b>Time:</b> {{ e.ts|ts }}<br>
+     <b>Target:</b> {{ e.device_name or "Unregistered client" }} ({{ e.target_ip }}{% if e.target_mac %}, {{ e.target_mac }}{% endif %})<br>
+     <b>Detected by:</b> {{ e.source }}<br>
+     {% if e.risk is not none %}<b>Risk score:</b> {{ e.risk }} / 100<br>{% endif %}
+     <b>Reason:</b> {{ e.reason }}<br>
+     {% if e.released_at %}<b>Released:</b> {{ e.released_at|ts }}{% endif %}</p>
+  <h2>Evidence</h2>
+  <pre>{{ e.evidence|pretty }}</pre>
+  <p><a class="btn secondary" href="/">Back</a>
+  {% if e.kind in ("quarantine", "block") and not e.released_at %}<a class="btn" href="/release/{{ e.target_ip }}">Release</a>{% endif %}</p>
+</section>
+{% endblock %}
