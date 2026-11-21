@@ -1,0 +1,19 @@
+# TANOD variables for Suricata. Include this from the main suricata.yaml, or copy
+# these two blocks into it, so the rules in tanod.rules know which hosts are the
+# cameras and which clients are allowed to watch them.
+#
+#   1. Put this file next to suricata.yaml (e.g. /etc/suricata/).
+#   2. In suricata.yaml, under `rule-files:`, add:  - tanod.rules
+#   3. Set CAMERAS and VIEWERS below to the real DHCP-reserved addresses.
+#   4. Run:  suricata -i wlan0 -S /etc/suricata/tanod.rules
+#      (or -r capture.pcap to replay a saved capture)
+#
+# These must match gateway/registry.py (demo_registry): the cameras and the
+# owner's approved viewer / NVR.
+
+vars:
+  address-groups:
+    # The IP cameras TANOD protects (Wi-Fi camera + wired IP CCTV).
+    CAMERAS: "[192.168.50.20,192.168.50.21]"
+    # Hosts allowed to open the camera streams (the owner's NVR / viewing PC).
+    VIEWERS: "[10.10.0.7,192.168.50.5]"

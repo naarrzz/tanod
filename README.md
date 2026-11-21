@@ -56,6 +56,26 @@ devices. Attack scripts are not kept in this repo and are deleted after testing.
 `python -m gateway.simulate` prints this table from synthetic traffic, with
 the time each detector took. These are code checks, not thesis results.
 
+## Running on real traffic (Pi 5 or a Kali test lab)
+
+Everything above is simulated. To detect and block **real** attacks (for the
+live defense demo with Kali Linux), TANOD reads a real interface and Suricata,
+and runs real nftables/hostapd commands:
+
+```bash
+# Suricata with TANOD's local rules (see suricata/tanod.yaml for the host vars)
+sudo suricata -i wlan0 -S suricata/tanod.rules -l /var/log/suricata
+
+# TANOD: watch the interface + Suricata, block the attacker for real (root)
+sudo TANOD_DRY_RUN=0 python3 -m gateway.run --iface wlan0 --eve /var/log/suricata/eve.json
+```
+
+Leave `TANOD_DRY_RUN` unset to rehearse: it prints the exact block commands
+instead of running them. `--pcap capture.pcap` replays a saved capture instead
+of sniffing live (needs `scapy`, commented in requirements). The exact Kali
+commands for each attack, the lab topology, and what to show the panel are in
+[docs/attack-playbook.md](docs/attack-playbook.md).
+
 ## Setup (laptop)
 
 Needs Python 3.10 or newer.
