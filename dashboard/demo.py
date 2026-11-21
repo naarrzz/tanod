@@ -2,26 +2,25 @@
 
     python -m dashboard.demo            # build data/demo.db, make accounts, start on http://localhost:8000
     python -m dashboard.demo --reset    # rebuild the demo data (keeps the accounts)
-    python -m dashboard.demo --cameras 4   # demo with 4 cameras (kept until changed)
+    python -m dashboard.demo --cameras 3   # demo with 3 cameras (kept until changed)
     python -m dashboard.demo --lan      # also HTTPS on the Wi-Fi: open https://<mac-ip>:8443/cam
                                         # on a phone to use it as the camera
 
-While the demo runs, from a second terminal:
-    python -m dashboard.demo --attack leak   # camera starts sending video to an unknown server
-                                             # -> camera quarantined, live feed cut, Telegram alert
-    python -m dashboard.demo --attack leak --camera 2   # same, on camera 2
-    python -m dashboard.demo --attack scan   # outside laptop port-scans the camera
-                                             # -> attacker blocked, feed keeps running
+Three views for the defense: the admin dashboard (a team account), the user
+dashboard (the owner account, in a private window) and the attacker (this
+terminal). While the demo runs, from a second terminal:
 
-The camera panel uses TANOD_CAMERA_URL (an MJPEG stream from a phone camera
-app) if it is set in .env; otherwise it uses a camera on the laptop, which
-can be an iPhone through Continuity Camera. "leak" is an exhibit scenario, not
-one of the six thesis tests: in the thesis the camera is only an attack target.
+    python -m dashboard.demo --attack scan          # A1, see --help for the list
+    python -m dashboard.demo --attack rejoin        # the blocked attacker changes its IP and tries again
+    python -m dashboard.demo --attack leak --camera 2
 
-The demo shows one hacked ESP32 node in quarantine and one blocked outside
-attacker, so the panel can watch a Release from start to finish. Accounts
-for the members are created once and saved in data/demo_accounts.txt
-(data/ is gitignored, so the passwords never reach the repo).
+Each attack runs through the real rules, models and decision logic on
+simulated traffic, prints what Suricata alone, the Isolation Forest and the
+binding check caught, records what TANOD did, and sends the Telegram alert.
+The camera is never cut off: TANOD blocks the attacker.
+
+Accounts are created once and saved in data/demo_accounts.txt (data/ is
+gitignored, so the passwords never reach the repo).
 """
 from __future__ import annotations
 
@@ -37,24 +36,26 @@ from .users import generate_password
 
 DEMO_DB = Path("data/demo.db")
 ACCOUNTS_FILE = Path("data/demo_accounts.txt")
-MEMBERS = [("narz", "Narz Alcaide"), ("rod", "Rod Dela Cruz"), ("christian", "Christian Famador")]
+MEMBERS = [("narz", "Narz Alcaide", "admin"), ("rod", "Rod Dela Cruz", "admin"),
+           ("christian", "Christian Famador", "admin"), ("owner", "Camera owner", "user")]
 
 
 def extra_cameras(n: int):
-    """Cameras 2..n for the demo (the thesis setup has one camera)."""
+    """Cameras 3..n for the demo (the thesis setup has one Wi-Fi camera and the wired CCTV)."""
     from gateway.registry import Device
-    return [Device(f"IP Camera {i}", f"aa:bb:cc:00:01:{i:02x}", f"192.168.50.{19 + i}", "camera")
-            for i in range(2, n + 1)]
+    return [Device(f"IP Camera {i}", f"aa:bb:cc:00:01:{i:02x}", f"192.168.50.{19 + i}", "camera", "wifi")
+            for i in range(3, n + 1)]
 
 
 def demo_cameras_registry(n: int):
     from gateway.registry import Registry, demo_registry
     reg = demo_registry()
-    return Registry(list(reg.devices.values()) + extra_cameras(n))
+    devs = list(reg.devices.values())[:max(n, 1)] + extra_cameras(n)
+    return Registry(devs, str(reg.lan), reg.gateway_ip, reg.gateway_mac, reg.viewers)
 
 
 def build_data(path: Path, cameras: int = 1) -> None:
-    """Fresh devices and events from the simulator, then trimmed to one clear story."""
+    """Fresh cameras plus one earlier, already-unblocked attack so the log is not empty."""
     from gateway import simulate
 
     conn = db.connect(path)
@@ -64,103 +65,126 @@ def build_data(path: Path, cameras: int = 1) -> None:
         simulate.main(["--db", str(path)])
     conn = db.connect(path)
     now = time.time()
-    # Keep: Node 1 quarantined (T6 hacked scan) and the Suricata block of the outside attacker.
-    keep = conn.execute(
-        """SELECT id FROM events WHERE (kind='quarantine' AND target_ip='192.168.50.11')
-           OR (kind='block' AND source='suricata')""").fetchall()
-    keep_ids = {r["id"] for r in keep}
-    for r in conn.execute("SELECT id, kind, target_ip FROM events").fetchall():
-        if r["id"] not in keep_ids:
-            conn.execute("UPDATE events SET released_at=? WHERE id=?", (now - 300, r["id"]))
-    # Spread the times out so the log reads like a real afternoon.
     rows = conn.execute("SELECT id FROM events ORDER BY id").fetchall()
-    for i, r in enumerate(rows):
-        conn.execute("UPDATE events SET ts=? WHERE id=?", (now - 60 * (len(rows) - i) * 7, r["id"]))
-    conn.execute("DELETE FROM devices WHERE kind='camera' AND ip <> '192.168.50.20'")
-    for d in extra_cameras(cameras):
-        db.upsert_device(conn, d.name, d.mac, d.ip, d.kind)
-    if cameras > 1:
-        conn.execute("UPDATE devices SET name='IP Camera 1' WHERE ip='192.168.50.20'")
-    conn.execute("UPDATE devices SET status='normal' WHERE ip <> '192.168.50.11'")
-    for ip, risk in [("192.168.50.12", 18.4), ("192.168.50.13", 21.7), ("192.168.50.20", 12.9)]:
+    keep = rows[:1]  # the A1 port scan block, shown as handled earlier today
+    conn.execute(f"DELETE FROM events WHERE id NOT IN ({','.join(str(r['id']) for r in keep) or 0})")
+    for r in keep:
+        conn.execute("UPDATE events SET ts=?, released_at=? WHERE id=?", (now - 3 * 3600, now - 3 * 3600 + 600, r["id"]))
+        conn.execute("INSERT INTO events (ts, kind, target_ip, target_mac, victim_ip, source, reason) "
+                     "SELECT ?, 'release', target_ip, target_mac, victim_ip, 'user', 'Unblocked by owner' "
+                     "FROM events WHERE id=?", (now - 3 * 3600 + 600, r["id"]))
+    reg = demo_cameras_registry(cameras)
+    conn.execute(f"DELETE FROM devices WHERE ip NOT IN ({','.join(repr(ip) for ip in reg.devices)})")
+    for d in reg.devices.values():
+        db.upsert_device(conn, d.name, d.mac, d.ip, d.kind, d.link)
+    conn.execute("UPDATE devices SET status='normal'")
+    for ip, risk in [("192.168.50.20", 12.9), ("192.168.50.21", 14.2)]:
         conn.execute("UPDATE devices SET last_risk=? WHERE ip=?", (risk, ip))
     conn.commit()
 
 
-ATTACKS = {
-    "leak": "Camera tries unknown servers and sends them copies of its video",
-    "scan": "Outside laptop port-scans the camera",
-}
+def _attacks():
+    from gateway.simulate import ATTACKS
+    return {**ATTACKS, "rejoin": ("A1b", "Blocked attacker changes its IP and scans again", "C")}
+
+
+ATTACKS = _attacks()
 
 
 def run_attack(path: Path, which: str, camera: int = 1, say=print) -> bool:
-    """Returns True when TANOD acted. Messages go to say() (print, or the dashboard)."""
-    """Run one camera scenario through the real models and decision logic, then record it now."""
+    """Run one attack through the real rules, models and decision logic, then record it now.
+    Returns True when TANOD blocked or alerted. Messages go to say() (print, or the dashboard)."""
     import random
 
     from alerts import telegram
     from gateway import simulate as S
-    from gateway.decision import DecisionEngine, SuricataAlert
     from gateway.enforce import Enforcer
 
-    rng = random.Random()
     conn = db.connect(path)
     n = max(conn.execute("SELECT COUNT(*) FROM devices WHERE kind='camera'").fetchone()[0], 1)
     if not 1 <= camera <= n:
         say(f"There {'is' if n == 1 else 'are'} {n} camera{'s' if n > 1 else ''} in the demo. "
-              f"Start it with --cameras {camera} to have camera {camera}.")
+            f"Start it with --cameras {camera} to have camera {camera}.")
         return False
     reg = demo_cameras_registry(n)
-    cam = [d.ip for d in reg.devices.values() if d.kind == "camera"][camera - 1]
-    if which == "leak" and any(e["target_ip"] == cam for e in db.active_responses(db.connect(path))):
-        say(f"Camera {camera} is already cut off, so TANOD has nothing new to do (and sends no new alert).")
-        say("Release it on the dashboard first, or reset the demo.")
+    cam = list(reg.devices)[camera - 1]
+    code, name, cia = ATTACKS[which]
+    say(f"{code} {name}  [CIA: {cia}]  (simulated traffic, dry run)")
+    say(f"Target: {reg.get(cam).name} ({cam})")
+
+    active = db.active_responses(conn)
+    blocked_macs = {e["target_mac"] for e in active if e["kind"] == "block" and e["target_mac"]}
+    if which == "rejoin":
+        if S.ATTACKER_MAC not in blocked_macs:
+            say("The attacker is not blocked yet. Run --attack scan first.")
+            return False
+        say(f"Attacker {S.ATTACKER_MAC} drops {S.ATTACKER} and takes {S.ATTACKER_NEW_IP}, then scans again.")
+        say(f"  Every packet from MAC {S.ATTACKER_MAC} is already dropped (nftables ether saddr, hostapd deny list),")
+        say("  so the new IP gets nothing through. TANOD adds the new IP to the block list too.")
+        ip_mac = next(e for e in active if e["target_mac"] == S.ATTACKER_MAC)
+        db.record_event(conn, "block", S.ATTACKER_NEW_IP, f"Blocked MAC {S.ATTACKER_MAC} came back as {S.ATTACKER_NEW_IP}",
+                        "binding_check", None, {"previous_ip": ip_mac["target_ip"], "mac": S.ATTACKER_MAC},
+                        target_mac=S.ATTACKER_MAC, victim_ip=cam)
+        Enforcer(dry_run=True).block(S.ATTACKER_NEW_IP, S.ATTACKER_MAC)
+        return True
+    if which in ("scan", "brute", "flood", "arp", "view") and S.ATTACKER_MAC in blocked_macs:
+        say(f"The attacker ({S.ATTACKER_MAC}) is already blocked, so its packets never reach the camera.")
+        say("Unblock it on the dashboard first, or reset the demo.")
         return False
-    say(f"Scenario: {ATTACKS[which]} (simulated traffic, dry run)")
-    say(f"Target: {db.device_by_ip(conn, cam)['name']} ({cam})")
+
+    rng = random.Random()
     bank, baselines = S.train_bank(reg, random.Random(7))
     t0 = 100_000.0
-    attack = S.camera_leak(rng, cam, t0 + 10) if which == "leak" else S.t3_port_scan(rng, cam, t0 + 10)
-    actions = S.run_scenario(which, attack, reg, bank, baselines, rng, t0, DecisionEngine(reg))
-    if not actions and which == "leak":
-        # The Isolation Forest can saturate (see the open design points); the local Suricata
-        # rule for camera video sent to an unapproved address catches it about 5 s in.
-        first = next(p for p in attack if p.src == cam)
-        alert = SuricataAlert(t0 + 15, 1, cam, first.dst,
-                              "TANOD local: camera video sent to an unapproved address", 9000010)
-        actions = S.run_scenario(which, attack, reg, bank, baselines, rng, t0, DecisionEngine(reg), [alert])
-    if not actions:
-        say("TANOD took no action this time. Run it again.")
+    res = S.run_scenario(S.build_scenario(which, rng, reg, cam, t0 + 10), reg, bank, baselines, rng, t0)
+    say(f"  Suricata only (Setup A):  {S.fmt(res.first(res.suricata))}")
+    say(f"  Isolation Forest:         {S.fmt(res.first(res.if_actions))}")
+    say(f"  IP-MAC binding check:     {S.fmt(res.first(res.binding_actions))}")
+    if not res.actions:
+        say("  TANOD (Setup B): nothing detected. This attack is a known gap (see the paper's limitations).")
         return False
     enforcer = Enforcer(dry_run=True)
-    for act in actions:
-        dev = db.device_by_ip(conn, act.target)
-        new = (act.evidence or {}).get("new_destinations") or []
-        if act.kind == "quarantine" and new:
-            act.reason += (f"; it started sending data to new addresses ({', '.join(map(str, new[:2]))})" if len(new) > 1
-                           else f"; it started sending data to a new address ({new[0]})")
-        enforcer.quarantine(reg.get(act.target)) if act.kind == "quarantine" else enforcer.block(act.target)
-        db.record_event(conn, act.kind, act.target, act.reason, act.source, act.risk, act.evidence,
-                        target_mac=dev["mac"] if dev else None)
-        name = dev["name"] if dev else "Unregistered client"
-        say(f"  {act.kind} {name} ({act.target}) via {act.source}" + (f", risk {act.risk}" if act.risk is not None else "") + ", "
-              f"{max(act.ts - t0 - 10, 0):.0f} s after the attack started")
-        say("  " + telegram.notify(act.kind, name, act.target, act.reason, act.risk))
+    for act in res.actions:
+        if act.kind == "block":
+            enforcer.block(act.target, act.mac)
+        db.record_event(conn, act.kind, act.key, act.reason, act.source, act.risk, act.evidence,
+                        target_mac=act.mac, victim_ip=act.victim)
+        who = act.key + (f" (MAC {act.mac})" if act.mac and act.target else "")
+        say(f"  TANOD: {'block ' + who if act.kind == 'block' else 'alert, no attacker to block'} via {act.source}"
+            + (f", risk {act.risk}" if act.risk is not None else "")
+            + f", {max(act.ts - res.attack_start, 0):.0f} s after the attack started")
+    # one Telegram message per attack, even when several addresses were blocked
+    first = res.actions[0]
+    blocks = [a for a in res.actions if a.kind == "block"]
+    reason = first.reason + (f" ({len(blocks)} addresses blocked)" if len(blocks) > 1 else "")
+    camera_name = reg.get(first.victim).name if reg.get(first.victim) else first.victim
+    say("  " + telegram.notify(first.kind, camera_name, first.key, reason, first.risk))
+    if blocks:
+        say("  Only the attacker was blocked; the camera stays on the network.")
     return True
 
 
 def ensure_accounts(path: Path) -> None:
+    """Create the demo accounts that are missing. Existing passwords are never changed."""
     conn = db.connect(path)
-    if db.list_users(conn) and ACCOUNTS_FILE.exists():
-        return
-    lines = ["TANOD demo dashboard accounts (http://localhost:8000). Do not commit this file.", ""]
-    for user, name in MEMBERS:
+    have = {u["username"] for u in db.list_users(conn)}
+    lines = ACCOUNTS_FILE.read_text().splitlines() if ACCOUNTS_FILE.exists() else [
+        "TANOD demo dashboard accounts (http://localhost:8000). Do not commit this file.",
+        "admin = research team, user = camera owner (open it in a private window).", ""]
+    added = False
+    for user, name, role in MEMBERS:
+        if user in have:
+            if db.get_role(conn, user) != role:
+                conn.execute("UPDATE users SET role=? WHERE username=?", (role, user))
+                conn.commit()
+            continue
         pw = generate_password()
-        db.set_user(conn, user, pw, name)
-        lines.append(f"{user:10s} {pw}")
-    ACCOUNTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    ACCOUNTS_FILE.write_text("\n".join(lines) + "\n")
-    os.chmod(ACCOUNTS_FILE, 0o600)
+        db.set_user(conn, user, pw, name, role)
+        lines.append(f"{user:10s} {role:6s} {pw}")
+        added = True
+    if added or not ACCOUNTS_FILE.exists():
+        ACCOUNTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        ACCOUNTS_FILE.write_text("\n".join(lines) + "\n")
+        os.chmod(ACCOUNTS_FILE, 0o600)
 
 
 def lan_ip() -> str:
@@ -198,7 +222,7 @@ def serve(port: int, host: str, lan: bool, lan_port: int, buttons: bool = False)
 
     import uvicorn
     if buttons:
-        os.environ["TANOD_DEMO"] = "1"  # shows the Demo controls (Hijack, Scan, Reset, QR code)
+        os.environ["TANOD_DEMO"] = "1"  # shows the Demo controls (attack picker, Reset, QR code)
     for h, p in [(host, port)] + ([("0.0.0.0", lan_port)] if lan else []):
         with socket.socket() as sk:
             if sk.connect_ex(("127.0.0.1", p)) == 0:
@@ -233,10 +257,11 @@ def main(argv=None):
                     help="also serve HTTPS on the Wi-Fi so a phone can be the camera (open /cam on it)")
     ap.add_argument("--lan-port", type=int, default=8443)
     ap.add_argument("--buttons", action="store_true",
-                    help="show Demo controls on the dashboard (Hijack, Outside scan, Reset, QR code for the phone)")
+                    help="show Demo controls on the dashboard (attack picker, Reset, QR code for the phone)")
     ap.add_argument("--cameras", type=int, default=None, help="how many cameras the demo has (1 to 9)")
     ap.add_argument("--camera", type=int, default=1, help="which camera --attack targets (1 = the first)")
-    ap.add_argument("--attack", choices=sorted(ATTACKS), help="run a camera scenario against the running demo")
+    ap.add_argument("--attack", choices=list(ATTACKS),
+                    help="run an attack against the running demo: " + ", ".join(f"{k} ({v[0]})" for k, v in ATTACKS.items()))
     args = ap.parse_args(argv)
 
     from alerts import telegram

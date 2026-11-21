@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-{% if dry_run %}<div class="banner">Dry-run mode: firewall and relay actions are logged, not applied.</div>{% endif %}
+{% if dry_run %}<div class="banner">Dry-run mode: firewall actions are logged, not applied.</div>{% endif %}
 
 {% if cameras %}
 <section id="camera" data-active="{{ cameras[0].active }}">
@@ -8,31 +8,28 @@
     {% if cameras|length > 1 %}
     <select id="cam-view" style="font:inherit;font-size:14px;font-weight:400;margin-left:auto">
       <option value="all">All cameras ({{ cameras|length }})</option>
-      {% for c in cameras %}<option value="{{ c.ip }}">{{ c.name }}{{ " (cut off)" if c.isolated else "" }}</option>{% endfor %}
+      {% for c in cameras %}<option value="{{ c.ip }}">{{ c.name }}{{ " (attack blocked)" if c.attack else "" }}</option>{% endfor %}
     </select>
     {% endif %}
   </h2>
   <div class="cam-grid">
   {% for c in cameras %}
-  <div class="cam-tile" data-ip="{{ c.ip }}" data-source="{{ c.source }}" data-live="{{ 1 if c.live else 0 }}" data-isolated="{{ 1 if c.isolated else 0 }}">
-    <div class="cam-head"><b>{{ c.name }}</b> <span class="muted">{{ c.ip }}</span>
-      <span class="pill cam-pill {{ 'quarantined' if c.isolated else 'normal' }}">{{ "cut off" if c.isolated else "live" }}</span></div>
+  <div class="cam-tile" data-ip="{{ c.ip }}" data-source="{{ c.source }}" data-live="{{ 1 if c.live else 0 }}" data-attack='{{ c.attack|tojson }}'>
+    <div class="cam-head"><b>{{ c.name }}</b> <span class="muted">{{ c.ip }} · {{ c.link }}</span>
+      <span class="pill cam-pill normal">live</span></div>
     <div class="cam-box">
       <img alt="{{ c.name }} feed" hidden>
       <video autoplay muted playsinline hidden></video>
       <canvas width="640" height="360" hidden></canvas>
       <div class="cam-rec">● REC <span class="cam-clock"></span></div>
-      <div class="cam-off cam-cut" {% if not c.isolated %}hidden{% endif %}>
-        <b>CUT OFF BY TANOD</b>
-        <span class="cam-when">{% if c.since %}since {{ c.since }}{% endif %}{% if c.risk is not none %} · risk {{ c.risk|round|int }}{% endif %}</span>
-      </div>
+      <div class="cam-flag" hidden><b class="cam-flag-title">ATTACK BLOCKED</b> <span class="cam-when"></span></div>
       <div class="cam-off cam-wait" hidden>
         <b class="wait">Waiting for video</b>
         <span>On the phone: open /cam and pick {{ c.name }}</span>
       </div>
     </div>
-    <p class="cam-why" {% if not c.isolated %}hidden{% endif %}><b>Why:</b> <span>{{ c.reason or "" }}</span>.
-      The camera cannot send video until the owner releases it.</p>
+    <p class="cam-why" hidden><b>What happened:</b> <span></span>.
+      <span class="cam-after"></span></p>
     <p class="muted cam-foot"><span class="cam-src"></span> <select class="cam-pick" hidden></select></p>
   </div>
   {% endfor %}
@@ -56,6 +53,9 @@
   .cam-off b { color:#f87171; font-size:clamp(13px, 7cqw, 26px); letter-spacing:.04em; }
   .cam-off b.wait { color:#e5e7eb; }
   .cam-off span { font-size:clamp(11px, 3.6cqw, 15px); color:#d1d5db; }
+  .cam-flag { position:absolute; z-index:2; top:10px; right:12px; background:rgba(180,35,24,.92); color:#fff; padding:5px 9px;
+              border-radius:4px; font:600 12px/1.3 system-ui, sans-serif; max-width:70%; text-align:right; }
+  .cam-flag span { font-weight:400; display:block; }
   .cam-why { margin:8px 0 0; padding:8px 10px; border-radius:6px; background:#fde8e7; color:#7f1d1d; font-size:13px; line-height:1.4; }
   .cam-why[hidden] { display:none; }
   .cam-foot { margin:8px 0 0; font-size:13px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
@@ -69,9 +69,9 @@
   function tile(el) {
     const q = s => el.querySelector(s);
     const img = q("img"), vid = q("video"), test = q("canvas"), rec = q(".cam-rec");
-    const cut = q(".cam-cut"), wait = q(".cam-wait"), why = q(".cam-why"), whyText = q(".cam-why span"), when = q(".cam-when"), box = q(".cam-box"), src = q(".cam-src"), pick = q(".cam-pick");
+    const flag = q(".cam-flag"), flagTitle = q(".cam-flag-title"), wait = q(".cam-wait"), why = q(".cam-why"), whyText = q(".cam-why span"), after = q(".cam-after"), when = q(".cam-when"), box = q(".cam-box"), src = q(".cam-src"), pick = q(".cam-pick");
     const pill = q(".cam-pill"), ip = el.dataset.ip;
-    let st = { source: el.dataset.source, live: el.dataset.live === "1", isolated: el.dataset.isolated === "1" };
+    let st = { source: el.dataset.source, live: el.dataset.live === "1", attack: JSON.parse(el.dataset.attack || "null") };
     let stream = null, testTimer = null, shown = null;
 
     const showOnly = x => [img, vid, test].forEach(e => e.hidden = e !== x);
@@ -111,14 +111,20 @@
     // so a short pause from the phone never flips to another camera.
     function render() {
       if (el.hidden) { if (shown !== "hidden") { shown = "hidden"; stopAll(); } return; }
-      const want = st.isolated ? "cut" : (st.source === "phone" && !st.live) ? "wait" : st.source;
-      pill.textContent = st.isolated ? "cut off" : want === "wait" ? "no video" : "live";
-      pill.className = "pill cam-pill " + (st.isolated ? "quarantined" : want === "wait" ? "" : "normal");
-      cut.hidden = want !== "cut"; wait.hidden = want !== "wait"; rec.hidden = want === "cut" || want === "wait";
-      why.hidden = !st.isolated;
-      if (st.isolated) {
-        whyText.textContent = st.reason || "";
-        when.textContent = `since ${st.since}` + (st.risk != null ? ` · risk ${Math.round(st.risk)}` : "");
+      const want = (st.source === "phone" && !st.live) ? "wait" : st.source;
+      const a = st.attack;
+      pill.textContent = want === "wait" ? "no video" : a ? "live · protected" : "live";
+      pill.className = "pill cam-pill " + (want === "wait" ? "" : "normal");
+      wait.hidden = want !== "wait"; rec.hidden = want === "wait";
+      flag.hidden = why.hidden = !a;
+      if (a) {
+        const blocked = a.kind === "block";
+        flagTitle.textContent = blocked ? "ATTACK BLOCKED" : "WARNING";
+        when.textContent = (blocked ? `attacker ${a.mac || a.attacker}` : "no attacker to block") + ` · ${a.since}`;
+        whyText.textContent = a.reason || "";
+        after.textContent = blocked
+          ? `TANOD blocked the attacker${a.mac ? " by its MAC address, so changing its IP will not get it back in" : ""}. The camera keeps recording.`
+          : "TANOD could not name an attacker, so nothing was blocked. Check the camera.";
       }
       if (want === shown) return;
       shown = want; stopAll(); pick.hidden = true;
@@ -161,7 +167,7 @@
       res.cameras.forEach(c => {
         const t = tiles.find(t => t.ip === c.ip); if (t) t.update(c);
         const o = view && [...view.options].find(o => o.value === c.ip);
-        if (o) o.textContent = c.name + (c.isolated ? " (cut off)" : "");
+        if (o) o.textContent = c.name + (c.attack ? " (attack blocked)" : "");
       });
       if (res.active !== active) { active = res.active; setTimeout(refreshTables, 300); }
     } catch (e) {}
@@ -182,12 +188,11 @@
   <h2>Demo controls <span class="muted" style="font-weight:400;font-size:14px">simulated traffic, only in the demo</span></h2>
   <div class="demo-wrap">
     <div class="demo-actions">
-      {% for c in cameras %}
       <div class="demo-row">
-        <button class="btn" data-kind="leak" data-camera="{{ loop.index }}">Hijack {{ c.name }}</button>
-        <button class="btn secondary" data-kind="scan" data-camera="{{ loop.index }}">Outside scan on {{ c.name }}</button>
+        <select id="demo-kind">{% for k, a in attacks.items() %}<option value="{{ k }}">{{ a[0] }} {{ a[1] }}</option>{% endfor %}</select>
+        <select id="demo-cam">{% for c in cameras %}<option value="{{ loop.index }}">{{ c.name }}</option>{% endfor %}</select>
+        <button class="btn" id="demo-run">Run attack</button>
       </div>
-      {% endfor %}
       <div class="demo-row"><button class="btn secondary" id="demo-reset">Reset demo</button></div>
       <pre id="demo-out" hidden></pre>
     </div>
@@ -204,6 +209,7 @@
   .demo-wrap { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; }
   .demo-actions { flex:1 1 300px; }
   .demo-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .demo-row select { font:inherit; padding:5px 6px; }
   .demo-row .btn[disabled] { opacity:.5; cursor:wait; }
   .demo-qr { display:flex; gap:12px; align-items:center; max-width:420px; font-size:14px; }
   .demo-qr img { background:#fff; border:1px solid var(--line); border-radius:6px; flex:none; }
@@ -224,10 +230,12 @@
     } catch (e) { out.textContent = "Failed: " + e; }
     finally { buttons.forEach(b => b.disabled = false); }
   }
-  document.querySelectorAll("#demo [data-kind]").forEach(b => b.onclick = () => {
-    const f = new FormData(); f.append("kind", b.dataset.kind); f.append("camera", b.dataset.camera);
+  document.getElementById("demo-run").onclick = () => {
+    const f = new FormData();
+    f.append("kind", document.getElementById("demo-kind").value);
+    f.append("camera", document.getElementById("demo-cam").value);
     post("/demo/attack", f);
-  });
+  };
   document.getElementById("demo-reset").onclick = async () => {
     if (!confirm("Reset the demo to its starting state?")) return;
     const j = await post("/demo/reset", new FormData());
@@ -238,58 +246,58 @@
 {% endif %}
 
 <section>
-  <h2>Devices</h2>
+  <h2>Blocked attackers and open alerts</h2>
   <div class="table-wrap"><table>
-    <tr><th>Name</th><th>Type</th><th>IP / MAC</th><th>Status</th><th>Last risk</th><th>Relay cutoff</th><th></th></tr>
-    {% for d in devices %}
-    <tr>
-      <td>{{ d.name }}</td>
-      <td>{{ d.kind }}</td>
-      <td>{{ d.ip }}<br><span class="muted">{{ d.mac }}</span></td>
-      <td><span class="pill {{ d.status }}">{{ d.status }}</span></td>
-      <td>{{ d.last_risk if d.last_risk is not none else "" }}</td>
-      <td>{{ "on (ch " ~ d.relay_channel ~ ")" if d.relay_cutoff_enabled else "off" }}</td>
-      <td>{% if d.status == "quarantined" %}<a class="btn" href="/release/{{ d.ip }}">Release</a>{% endif %}</td>
-    </tr>
-    {% else %}
-    <tr><td colspan="7" class="muted">No registered devices yet. Run: python -m dashboard.seed</td></tr>
-    {% endfor %}
-  </table></div>
-</section>
-
-<section>
-  <h2>Blocked and quarantined now</h2>
-  <div class="table-wrap"><table>
-    <tr><th>Since</th><th>Action</th><th>Target</th><th>Reason</th><th></th></tr>
+    <tr><th>Since</th><th>Action</th><th>Attacker</th><th>Camera</th><th>Reason</th><th></th></tr>
     {% for e in active %}
     <tr>
       <td>{{ e.ts|ts }}</td>
-      <td><span class="pill {{ e.kind }}">{{ e.kind }}</span></td>
-      <td>{{ e.device_name or "Unregistered client" }}<br><span class="muted">{{ e.target_ip }}</span></td>
+      <td><span class="pill {{ e.kind }}">{{ e.kind }}</span><br><span class="muted">{{ e.source }}</span></td>
+      <td>{% if e.kind == "block" %}{{ e.target_ip }}{% if e.target_mac and e.target_mac != e.target_ip %}<br><span class="muted">MAC {{ e.target_mac }}</span>{% endif %}{% else %}<span class="muted">none found</span>{% endif %}</td>
+      <td>{{ e.device_name or e.victim_ip or "" }}</td>
       <td>{{ e.reason }} <a href="/events/{{ e.id }}">evidence</a></td>
-      <td><a class="btn" href="/release/{{ e.target_ip }}">Release</a></td>
+      <td><a class="btn" href="/release/{{ e.target_ip }}">{{ "Unblock" if e.kind == "block" else "Dismiss" }}</a></td>
     </tr>
     {% else %}
-    <tr><td colspan="5" class="muted">Nothing is blocked.</td></tr>
+    <tr><td colspan="6" class="muted">Nothing is blocked.</td></tr>
     {% endfor %}
   </table></div>
 </section>
-
+{% if user.is_admin %}
+<section>
+  <h2>Cameras <span class="muted" style="font-weight:400;font-size:14px">admin view</span></h2>
+  <div class="table-wrap"><table>
+    <tr><th>Name</th><th>Link</th><th>IP / MAC (DHCP reservation)</th><th>Status</th><th>Last risk</th></tr>
+    {% for d in devices %}
+    <tr>
+      <td>{{ d.name }}</td>
+      <td>{{ d.link }}</td>
+      <td>{{ d.ip }}<br><span class="muted">{{ d.mac }}</span></td>
+      <td><span class="pill {{ 'block' if d.status == 'attacked' else 'normal' }}">{{ "attacked, protected" if d.status == "attacked" else "normal" }}</span></td>
+      <td>{{ d.last_risk if d.last_risk is not none else "" }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="muted">No registered cameras yet. Run: python -m dashboard.seed</td></tr>
+    {% endfor %}
+  </table></div>
+</section>
+{% endif %}
 <section>
   <h2>Recent events</h2>
   <div class="table-wrap"><table>
-    <tr><th>Time</th><th>Event</th><th>Target</th><th>Source</th><th>Risk</th><th>Reason</th></tr>
+    <tr><th>Time</th><th>Event</th><th>Attacker</th><th>Camera</th><th>Detected by</th><th>Risk</th><th>Reason</th></tr>
     {% for e in events %}
     <tr>
       <td>{{ e.ts|ts }}</td>
       <td><span class="pill {{ e.kind }}">{{ e.kind }}</span></td>
-      <td>{{ e.device_name or e.target_ip }}</td>
+      <td>{{ e.target_ip if e.kind != "alert" else "" }}</td>
+      <td>{{ e.device_name or e.victim_ip or "" }}</td>
       <td>{{ e.source }}</td>
       <td>{{ e.risk if e.risk is not none else "" }}</td>
       <td><a href="/events/{{ e.id }}">{{ e.reason }}</a></td>
     </tr>
     {% else %}
-    <tr><td colspan="6" class="muted">No events yet.</td></tr>
+    <tr><td colspan="7" class="muted">No events yet.</td></tr>
     {% endfor %}
   </table></div>
 </section>

@@ -1,39 +1,60 @@
 # TANOD
 
-**Threat Analysis and Network Observation Device**: a Raspberry Pi 5 Wi-Fi
-gateway that watches three ESP32 test nodes and one Wi-Fi IP camera, detects
-attacks with Suricata rules plus a per-device Isolation Forest, and responds
-with nftables quarantine, an optional relay power cutoff, an owner dashboard
-and plain-language alerts.
+**Threat Analysis and Network Observation Device**: a Raspberry Pi 5 gateway
+that protects IP cameras (Wi-Fi cameras on its own access point and wired IP
+CCTV on its Ethernet port). It detects attacks with Suricata rules, a
+per-camera Isolation Forest and an IP-MAC binding check, **blocks the attacker
+by MAC address** (not the camera, so the camera keeps recording), and alerts
+the owner on a dashboard and Telegram. It is meant as one more layer next to a
+VPN and a firewall, not a replacement for them.
 
-This repo is the software skeleton for the BSECE thesis prototype. Everything
-here runs on a laptop without the hardware: firewall and relay actions are
-dry-run or mocked, and traffic can be simulated.
+This repo is the software for a BSECE thesis prototype. Everything here runs
+on a laptop without the hardware: firewall actions are dry-run and traffic is
+simulated.
 
 ## Safety rule (read first)
 
-Attack tests (T3 to T8) are run **only by the researchers, only on devices they
-own, and only on the isolated test network** with no route to the school
-network or the internet (check T2 at the start of every test day), as required
-by RA 10175 and the adviser-approved test plan. Hacked mode in the node
-firmware and any attack scripts must never be pointed at other networks or
+Attack tests (A1 to A9) are run **only by the researchers, only on cameras
+they own, and only on the isolated test network** with no route to the school
+network or the internet (check the isolation at the start of every test day),
+as required by RA 10175 and the adviser-approved test plan. The school's
+wired CCTV is monitored only with the school's written permission and is
+never attacked. Attack tools must never be pointed at other networks or
 devices. Attack scripts are not kept in this repo and are deleted after testing.
 
 ## Layout
 
 | Path | What it does |
 |---|---|
-| `gateway/features.py` | Ten per-device features per 2-second window (Table 4) from packet header metadata |
-| `gateway/model.py` | Per-device Isolation Forest, 100 trees, max_samples 256, threshold at the 99.82nd percentile of calibration scores, risk = 100 × s |
-| `gateway/decision.py` | Priority 1 Suricata alert → respond; 2 consecutive flagged windows → quarantine; unregistered client sending most of the traffic → block it instead |
-| `gateway/enforce.py` | nftables quarantine/block/release command builders (dry-run by default), relay controller (mock + Pi GPIO), relay cutoff off by default |
-| `gateway/registry.py` | Registered devices by MAC, LAN subnet, unregistered-client check |
+| `gateway/features.py` | Ten per-camera features per 2-second window from packet header metadata |
+| `gateway/model.py` | Per-camera Isolation Forest, 100 trees, max_samples 256, threshold at the 99.82nd percentile of calibration scores, risk = 100 × s |
+| `gateway/decision.py` | Who to block: the attacker, by MAC on the LAN and by IP outside it; never the camera or the gateway |
+| `gateway/spoof.py` | IP-MAC binding check: ARP/IP spoofing (block the spoofer's MAC) and MAC cloning (block the impostor's IP) |
+| `gateway/rules.py`, `suricata/tanod.rules` | TANOD's local Suricata rules, and a laptop stand-in that applies the same thresholds |
+| `gateway/enforce.py` | nftables block sets (MAC and IP), hostapd deny list + deauthentication, conntrack; dry run by default |
+| `gateway/registry.py` | Registered cameras by MAC (DHCP reservations), approved viewers, IP-to-MAC bindings |
 | `gateway/suricata.py` | Reads alerts from Suricata `eve.json` |
-| `gateway/simulate.py` | Synthetic traffic for the Table 6 scenarios, runs the whole pipeline, writes to the dashboard DB |
-| `dashboard/` | FastAPI + SQLite owner dashboard: devices, events with evidence, password-protected Release with confirmation |
+| `gateway/simulate.py` | The attack list (A1–A9) on synthetic traffic, with what each detector caught |
+| `dashboard/` | FastAPI + SQLite dashboard with admin and user roles, live camera tiles, blocked attackers, evidence, Unblock |
 | `alerts/` | Plain-language alerts in Telegram Bot API `sendMessage` format, sent to a local mock endpoint by default |
-| `firmware/esp32_node/` | Arduino sketch: normal mode and hacked mode (scan, dummy upload, 1 s beacon) by USB serial command, logs start time |
-| `tests/` | pytest tests for features, threshold, decision rules, enforcement, alerts, dashboard |
+| `tests/` | pytest tests for features, model, decision rules, spoofing, enforcement, alerts, dashboard and the attack table |
+
+## Attack list
+
+| # | Attack | CIA | Caught by |
+|---|---|---|---|
+| A1 | Port scan of the camera | C | Suricata, Isolation Forest |
+| A2 | Password guessing on the camera login | C | Suricata, Isolation Forest |
+| A3 | UDP flood (denial of service) | A | Suricata (rate rule); the Isolation Forest misses it |
+| A4 | ARP spoofing (attacker pretends to be the gateway) | C, I | binding check only |
+| A5 | MAC cloning (attacker copies the camera's MAC) | C, I, A | binding check only |
+| A6 | Unauthorized viewing of the live stream | C | Suricata, Isolation Forest |
+| A7 | Hijacked camera sends its video to unknown servers | C | Isolation Forest only |
+| A8 | Hijacked camera checks in with a command server | C | **missed** (see open points) |
+| A9 | Wi-Fi deauthentication knocks the camera offline | A | Isolation Forest only (alert, no attacker to block) |
+
+`python -m gateway.simulate` prints this table from synthetic traffic, with
+the time each detector took. These are code checks, not thesis results.
 
 ## Setup (laptop)
 
@@ -60,72 +81,56 @@ TANOD_DASHBOARD_PASSWORD=change-this .venv/bin/uvicorn dashboard.app:app --port 
 
 Open http://127.0.0.1:8000.
 
-Accounts: once any account exists, each person signs in with their own
-username, and the built-in `owner` login stops working. Release asks for the
-signed-in user's password again.
+Accounts and roles. **admin** is the research team (installs TANOD, creates
+and removes accounts, sees device details); **user** is the camera owner
+(watches the cameras, reads alerts and evidence, unblocks). Only an admin
+creates accounts, on the Accounts page or from the command line; there is no
+public sign-up, because the dashboard controls the owner's network. Until the
+first account exists, the built-in `admin` login with
+`TANOD_DASHBOARD_PASSWORD` works. Unblock asks for the signed-in user's
+password again.
 
 ```bash
-.venv/bin/python -m dashboard.users add narz --name "Narz"     # asks for a password
-.venv/bin/python -m dashboard.users add rod --generate         # random password, printed once
+.venv/bin/python -m dashboard.users add narz --name "Narz" --role admin   # asks for a password
+.venv/bin/python -m dashboard.users add owner --generate                  # role user, random password
 .venv/bin/python -m dashboard.users list
 ```
 
 Each person can change their own password from the dashboard (Change password
-link beside their name). Running `users add` again on an existing username also
-sets a new password.
+link beside their name).
 
-### Presentation demo
-
-```bash
-.venv/bin/python -m dashboard.demo            # demo data + member accounts, serves http://localhost:8000
-.venv/bin/python -m dashboard.demo --reset    # put the demo back (Node 1 quarantined, one blocked client)
-```
-
-The demo uses `data/demo.db` (simulated data, dry run) and creates accounts
-for narz, rod and christian the first time. Their passwords are saved in
-`data/demo_accounts.txt`, which is gitignored.
-
-**Live camera panel.** The dashboard shows the camera at the top. The easiest
-camera is a phone on the same Wi-Fi as the Mac:
+### Presentation demo (admin, user and attacker side by side)
 
 ```bash
-.venv/bin/python -m dashboard.demo --lan   # prints https://<mac-ip>:8443/cam
+.venv/bin/python -m dashboard.demo --lan --cameras 2   # demo data + accounts, serves http://localhost:8000
+.venv/bin/python -m dashboard.demo --reset             # put the demo back
 ```
 
-Open that link on the phone, pick which camera the phone is, accept the certificate warning (it is the demo's
-own self-signed certificate in `data/certs/`), sign in, allow the camera and tap
-Start. The phone sends JPEG frames to TANOD, and the dashboard on the Mac
-(http://localhost:8000) shows them live. While the camera is quarantined, TANOD
-refuses the phone's frames and both screens say it was cut off.
+The demo uses `data/demo.db` (simulated data, dry run). Accounts for narz,
+rod, christian (admin) and owner (user) are created once and saved in
+`data/demo_accounts.txt`, which is gitignored; existing passwords are kept.
 
-**Several cameras.** `--cameras 4` gives the demo four cameras (kept until
-changed). The dashboard shows them as a grid, with a dropdown to watch all of
-them or just one. Each phone opens `/cam` and picks its camera. Attack one with
-`--attack leak --camera 3`. With `--lan`, the dashboard never falls back to the
-laptop camera, so a phone pausing for a moment does not switch feeds.
-
-Other sources: `TANOD_CAMERA_URL` (an MJPEG stream from an IP camera app), or a
-camera on the laptop, which can be an iPhone through Continuity Camera (pick it
-in the dropdown under the feed). While the camera is
-quarantined, the dashboard stops relaying the stream and shows why.
-
-With `--buttons`, the demo dashboard also shows **Demo controls** under the cameras: Hijack, Outside
-scan and Reset buttons (no typing), plus a QR code the camera phone can scan
-(with `--lan`). `scripts/TANOD Demo.command` is a double-click launcher for
-macOS (copy it to the Desktop); it stops an older demo and starts
-`--lan --cameras 1`.
-
-The same scenarios from a second terminal:
+For the defense: open the dashboard as an admin in one window and as `owner`
+in a private window, and keep a terminal for the attacker:
 
 ```bash
-.venv/bin/python -m dashboard.demo --attack leak   # camera tries unknown servers and sends them video -> camera cut off
-.venv/bin/python -m dashboard.demo --attack scan   # outside laptop scans the camera -> attacker blocked, feed stays
+.venv/bin/python -m dashboard.demo --attack scan     # A1: Suricata and the forest both catch it
+.venv/bin/python -m dashboard.demo --attack rejoin   # the blocked attacker changes IP: still blocked by MAC
+.venv/bin/python -m dashboard.demo --attack leak     # A7: Suricata misses, the Isolation Forest catches it
+.venv/bin/python -m dashboard.demo --attack arp      # A4: only the binding check catches spoofing
+.venv/bin/python -m dashboard.demo --help            # every attack
 ```
 
-Both run simulated traffic through the trained models and the real decision
-logic. `leak` is an exhibit scenario only: in the thesis tests the camera is
-an attack target and is never put in hacked mode. Release the camera from the
-dashboard to bring the feed back.
+Each attack prints what Suricata alone (Setup A), the Isolation Forest and the
+binding check caught, then what TANOD did. The camera tile keeps playing and
+shows "ATTACK BLOCKED" with the attacker's MAC. With `--buttons`, the same
+attacks can be run from a picker on the dashboard.
+
+**Live camera tiles.** With `--lan`, open `https://<mac-ip>:8443/cam` on a
+phone (same Wi-Fi), pick which camera it is, accept the certificate warning
+(the demo's own self-signed certificate in `data/certs/`), sign in, allow the
+camera and tap Start. `TANOD_CAMERA_URL` (an MJPEG stream) also works for the
+first camera. `scripts/TANOD Demo.command` is a double-click launcher for macOS.
 
 **Real Telegram alerts (exhibit, normal network only).** Copy `.env.example`
 to `.env` (gitignored), create a bot with @BotFather, put its token in
@@ -136,7 +141,7 @@ to `.env` (gitignored), create a bot with @BotFather, put its token in
 .venv/bin/python -m alerts.telegram test    # sends one test alert
 ```
 
-After that, `--attack` and every Release send a Telegram message. During the
+After that, `--attack` and every Unblock send a Telegram message. During the
 isolated thesis trials, keep using the local mock below instead.
 
 Alerts go to a local stand-in for the Telegram API. In another terminal:
@@ -153,79 +158,27 @@ with their arrival time in `data/alerts_received.jsonl` (for T11).
 | Var | Default | Meaning |
 |---|---|---|
 | `TANOD_DB` | `data/tanod.db` | SQLite file |
-| `TANOD_DASHBOARD_PASSWORD` | `tanod-dev` (dev only) | Dashboard and Release password |
-| `TANOD_DRY_RUN` | `1` | `0` runs nft/conntrack commands for real (Pi, root) |
+| `TANOD_DASHBOARD_PASSWORD` | `tanod-dev` (dev only) | Built-in admin password until named accounts exist |
+| `TANOD_DRY_RUN` | `1` | `0` runs nft, hostapd_cli and conntrack for real (Pi, root) |
 | `TANOD_ALERT_ENDPOINT` | `http://127.0.0.1:8081` | Telegram-format endpoint |
 | `TANOD_BOT_TOKEN`, `TANOD_CHAT_ID` | test values | Real values only for the separate Telegram check |
 | `TANOD_CAMERA_URL` | unset | MJPEG stream shown on the dashboard |
 
-## What the simulation shows (synthetic data, not results)
-
-With `python -m gateway.simulate` (seed 7):
-
-| Test | Outcome in simulation |
-|---|---|
-| T3 port scan on camera | attacker blocked (Isolation Forest, unregistered majority rule) |
-| T4 password guessing | attacker blocked (simulated Suricata priority 1 alert) |
-| T5 flood | **not detected by Isolation Forest**, needs a Suricata rate/threshold rule |
-| T6 hacked node scan | hacked node quarantined, scanned devices not quarantined |
-| T7 dummy upload | node quarantined |
-| T8 1 s beacon | node quarantined |
-
-These numbers come from made-up traffic and only prove that the code paths
-work. Real thresholds and detection rates come from the 7-day baseline and the
-540 trials.
-
 ## Open design points for Narz and the advisers
 
-1. **Isolation Forest saturates.** A value far outside the training range gets
-   about the same score as the most extreme training value, so an attack that
-   changes only one feature (like the T5 flood, mostly `bytes_received`) can
-   stay under the 99.82nd percentile threshold. Plan a Suricata threshold rule
-   for floods (Table 6 already says "limit and block the source"), and check
-   T5 in Setup C with real baseline data.
-2. **Feature 7 (new destinations) is always 0 in training** if the baseline
-   destination list is learned from the same five training days. Isolation
-   Forest never splits on a constant feature, so it ignores it. Options: learn
-   the destination list from days 1 to 3 and train on days 1 to 5, or add a
-   simple rule for "new destination" next to the model. Same risk for any
-   feature that is constant in the baseline (for example connection attempts
-   on a node that keeps one connection open).
-3. **Rule 4 in `decision.py` is a skeleton choice, not in the approved text.**
-   When a flagged device mostly *received* connection attempts from another
-   protected device, it is not quarantined; the sender is judged by its own
-   model. Without this, the devices scanned in T6 were quarantined too.
-4. **Connection attempts count both directions** (SYNs sent and received), so
-   a port scan or password guessing against a device also changes that
-   device's features. The decision logic then decides who to block.
-5. **Failed connection ratio** counts a TCP attempt as failed when no SYN-ACK
-   comes back in the same 2-second window. UDP has no handshake, so it does
-   not count.
-6. **Majority share** for "most of the suspicious traffic" is set at more than
-   50% of the packets reaching the device in that window.
-
-## What still needs the real Pi 5 and hardware
-
-- **Packet capture on `wlan0`**: a live source that turns packets into
-  `gateway.features.Packet` records (scapy, `tshark -T fields`, or Zeek
-  `conn.log`), plus the long-running loop that scores each window every 2 s.
-  Must sustain about 779 packets/s (Eq. 9) and 6.23 Mbps (T10).
-- **hostapd / dnsmasq** config: WPA2/WPA3, client isolation, MAC-registered
-  devices, DHCP reservations matching `gateway/registry.py`.
-- **Suricata** install, community ruleset plus local rules (including a flood
-  threshold rule), and tailing `eve.json` into `DecisionEngine.on_suricata_alert`.
-- **Zeek** connection logs.
-- **nftables for real**: run `Enforcer(dry_run=False).setup()` as root, check
-  that quarantine, block and release behave as expected, and that `conntrack`
-  is installed.
-- **Relays**: `GpioRelay` needs `gpiozero` and the real BCM pin numbers for each
-  channel; verify the normally closed wiring (T1) and the under-1 s cutoff (T11).
-- **Baseline**: 7 days of normal traffic, train on days 1 to 5, calibrate on
-  days 6 to 7, freeze and save the models (`ModelBank.save`).
-- **ESP32 firmware**: flash, set the test network SSID/passphrase and the real
-  addresses, replace the placeholder report with the real sensor protocol.
-- **Telegram**: real bot token and chat ID, verified on an ordinary network
-  with no attacks running.
-- **Dashboard hardening**: run it only on the management interface for the
-  monitoring laptop, HTTPS or a trusted link, real password.
-- **Status display** and the temperature stop at 85 °C (system logs).
+1. **A8 (beacon) is missed.** Feature 7 (new destinations) is always 0 in
+   training when the baseline destination list is learned from the same
+   days, and an Isolation Forest never splits on a constant feature. Options:
+   learn the destination list from days 1 to 3 and train on days 1 to 5, or
+   add a simple "new destination" rule next to the model.
+2. **The Isolation Forest saturates on floods (A3).** A value far outside the
+   training range scores about the same as the most extreme training value,
+   so the flood is left to the Suricata rate rule (sid 9000003/9000005).
+3. **A9 (deauthentication) can only be noticed, not blocked.** The forged
+   frames never reach IP; TANOD sees the camera go silent and alerts the
+   owner. Catching the frames themselves needs a second Wi-Fi card in monitor
+   mode (or WPA3 with Protected Management Frames, which stops the attack).
+4. **MAC addresses can be changed too.** A MAC block stops an attacker that
+   only changes its IP. One that also changes its MAC still needs the Wi-Fi
+   passphrase to rejoin and is caught again by the same detectors. WPA3 and a
+   unique passphrase limit this.

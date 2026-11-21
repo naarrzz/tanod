@@ -1,11 +1,12 @@
 """Manage dashboard accounts.
 
-    python -m dashboard.users add narz --name "Narz"   # asks for the password
-    python -m dashboard.users add rod --generate        # makes and prints a random one
+    python -m dashboard.users add narz --name "Narz" --role admin   # asks for the password
+    python -m dashboard.users add owner --generate                  # role user, random password
     python -m dashboard.users list
     python -m dashboard.users remove rod
 
-Once any account exists, the built-in "owner" login stops working.
+Roles: admin (the research team) and user (the camera owner, the default).
+Once any account exists, the built-in "admin" login stops working.
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ def main(argv=None):
     add.add_argument("username")
     add.add_argument("--name")
     add.add_argument("--generate", action="store_true", help="create a random password and print it")
+    add.add_argument("--role", choices=db.ROLES, default=None, help="admin or user (default user for a new account)")
     sub.add_parser("list")
     rm = sub.add_parser("remove")
     rm.add_argument("username")
@@ -47,11 +49,11 @@ def main(argv=None):
                 raise SystemExit("Use at least 8 characters.")
             if pw != getpass.getpass("Again: "):
                 raise SystemExit("Passwords do not match.")
-        db.set_user(conn, args.username, pw, args.name)
+        db.set_user(conn, args.username, pw, args.name, args.role)
         print(f"Saved account {args.username.lower()}" + (f" with password: {pw}" if args.generate else ""))
     elif args.cmd == "list":
         for u in db.list_users(conn):
-            print(f"{u['username']:12s} {u['display_name']}")
+            print(f"{u['username']:12s} {u['role']:6s} {u['display_name']}")
     else:
         print("Removed" if db.delete_user(conn, args.username) else "No such account")
 

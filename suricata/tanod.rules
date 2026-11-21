@@ -1,0 +1,17 @@
+# TANOD local Suricata rules (Section 3.6). Loaded next to the community rules.
+# $CAMERAS = the registered cameras, $VIEWERS = the owner's NVR / viewing PC.
+# gateway/rules.py emulates these exact thresholds for the laptop simulation,
+# so the Setup A (Suricata only) results there match what the Pi would do.
+
+# A1 port scan: many connection attempts from one source to a camera
+alert tcp any any -> $CAMERAS any (msg:"TANOD local: port scan on a camera"; flags:S,12; detection_filter:track by_src, count 20, seconds 5; priority:1; classtype:attempted-recon; sid:9000001; rev:1;)
+
+# A2 password guessing: repeated logins to the camera's web or stream login
+alert tcp !$VIEWERS any -> $CAMERAS [80,443,554,8080] (msg:"TANOD local: repeated logins to a camera"; flags:S,12; detection_filter:track by_src, count 15, seconds 10; priority:1; classtype:attempted-user; sid:9000002; rev:1;)
+
+# A3 flood (Availability): one source sends packets to a camera far faster than normal
+alert udp any any -> $CAMERAS any (msg:"TANOD local: UDP flood on a camera"; detection_filter:track by_src, count 500, seconds 1; priority:1; classtype:attempted-dos; sid:9000003; rev:1;)
+alert tcp any any -> $CAMERAS any (msg:"TANOD local: SYN flood on a camera"; flags:S,12; detection_filter:track by_src, count 500, seconds 1; priority:1; classtype:attempted-dos; sid:9000005; rev:1;)
+
+# A6 unauthorized viewing: a client that is not an approved viewer opens the camera's stream
+alert tcp !$VIEWERS any -> $CAMERAS [554,8554] (msg:"TANOD local: camera stream opened by an unapproved client"; flags:S,12; priority:1; classtype:policy-violation; sid:9000004; rev:1;)

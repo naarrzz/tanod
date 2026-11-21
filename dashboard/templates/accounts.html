@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+  <h2>Accounts</h2>
+  <p class="muted">Only an admin can create accounts; there is no public sign-up. <b>admin</b> = the research team (installs TANOD, manages accounts). <b>user</b> = the camera owner (watches the cameras, gets alerts, can unblock).</p>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  {% if created %}
+  <p class="banner">Created <b>{{ created.username }}</b> ({{ created.role }}). Password: <b>{{ created.password }}</b><br>
+    Give it to them now; it is not shown again. They can change it on the Change password page.</p>
+  {% endif %}
+  <div class="table-wrap"><table>
+    <tr><th>Username</th><th>Name</th><th>Role</th><th></th></tr>
+    {% for u in users %}
+    <tr>
+      <td>{{ u.username }}</td><td>{{ u.display_name }}</td><td>{{ u.role }}</td>
+      <td>{% if u.username != user.name %}<form method="post" action="/accounts/{{ u.username }}/remove" onsubmit="return confirm('Remove {{ u.username }}?')"><button class="btn secondary" type="submit">Remove</button></form>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">No named accounts yet. You are using the built-in admin login.</td></tr>
+    {% endfor %}
+  </table></div>
+</section>
+<section>
+  <h2>Add an account</h2>
+  <form method="post" action="/accounts">
+    <p><label>Username<input type="text" name="username" required maxlength="32" autocomplete="off"></label></p>
+    <p><label>Full name<input type="text" name="name" maxlength="80" autocomplete="off"></label></p>
+    <p><label>Role<br><select class="field" name="role"><option value="user">user (camera owner)</option><option value="admin">admin (research team)</option></select></label></p>
+    <p><button class="btn" type="submit" style="background:var(--accent)">Create with a random password</button></p>
+  </form>
+</section>
+{% endblock %}

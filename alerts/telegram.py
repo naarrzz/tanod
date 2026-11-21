@@ -26,26 +26,28 @@ DEFAULT_ENDPOINT = "http://127.0.0.1:8081"
 
 # What the owner should do, in plain words, per response type.
 NEXT_STEPS = {
-    "quarantine": (
-        "What to do: unplug the device, then reset it or ask your installer or a technician to check it. "
-        "When it is safe, open the TANOD dashboard and click Release."
-    ),
     "block": (
+        "Your camera kept recording; only the attacker was cut off. "
         "What to do: change the Wi-Fi password and do not share it. "
-        "If you know this device, you can release it from the TANOD dashboard."
+        "If you know this device and it was a mistake, unblock it on the TANOD dashboard."
+    ),
+    "alert": (
+        "Nothing was blocked because TANOD could not tell who did it. "
+        "What to do: check that the camera is powered and connected, then dismiss the alert on the dashboard."
     ),
 }
 
 
-def build_message(action_kind: str, device_name: str, target: str, reason: str,
+def build_message(action_kind: str, camera_name: str, target: str, reason: str,
                   risk: float | None = None, ts: float | None = None) -> str:
+    """camera_name: the camera that was attacked. target: the attacker (IP or MAC), or the camera for alerts."""
     when = datetime.fromtimestamp(ts or time.time()).strftime("%Y-%m-%d %H:%M:%S")
-    if action_kind == "quarantine":
-        head = f"TANOD: {device_name} was cut off from the network."
+    if action_kind == "block":
+        head = f"TANOD: An attack on {camera_name} was blocked. Attacker: {target}."
     elif action_kind == "release":
-        head = f"TANOD: {device_name} ({target}) was reconnected to the network."
+        head = f"TANOD: {target} was unblocked from the dashboard."
     else:
-        head = f"TANOD: An unknown device ({target}) was blocked from your network."
+        head = f"TANOD: Warning about {camera_name}."
     lines = [head, f"Why: {reason}."]
     if risk is not None:
         lines.append(f"Risk score: {risk:.0f} out of 100.")
@@ -111,7 +113,7 @@ def _cli(argv=None):
     args = ap.parse_args(argv)
     load_env()
     if args.cmd == "test":
-        print(notify("quarantine", "Test device", "192.168.50.20", "This is a test alert from TANOD", 0))
+        print(notify("block", "Test camera", "192.168.50.99", "This is a test alert from TANOD", 0))
         return
     token = os.environ.get("TANOD_BOT_TOKEN", "test-token")
     if token == "test-token":
