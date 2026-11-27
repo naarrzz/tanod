@@ -91,3 +91,31 @@ def test_dry_run_pipeline_runs_no_commands_for_real():
     pipe.process_frames(frames_from_packets(S.a1_port_scan(random.Random(1), CAM, 100.0, src=ATTACKER), ATTACKER_MAC))
     # executed records what WOULD run, but the dry-run runner never calls subprocess
     assert enforcer.executed  # commands were built
+
+
+# ---- lab: registry from environment ------------------------------------
+def test_registry_from_env_defaults_to_demo(monkeypatch):
+    from gateway.registry import demo_registry, registry_from_env
+    for v in ["TANOD_CAMERAS", "TANOD_VIEWERS", "TANOD_LAN", "TANOD_GATEWAY_IP", "TANOD_GATEWAY_MAC"]:
+        monkeypatch.delenv(v, raising=False)
+    r, d = registry_from_env(), demo_registry()
+    assert set(r.devices) == set(d.devices) and r.gateway_ip == d.gateway_ip and r.viewers == d.viewers
+
+
+def test_registry_from_env_overrides_lab_addresses(monkeypatch):
+    from gateway.registry import registry_from_env
+    monkeypatch.setenv("TANOD_CAMERAS", "Lab Cam|52:54:00:aa:bb:20|192.168.50.20|wifi")
+    monkeypatch.setenv("TANOD_VIEWERS", "192.168.50.5")
+    monkeypatch.setenv("TANOD_GATEWAY_IP", "192.168.50.1")
+    r = registry_from_env()
+    assert list(r.devices) == ["192.168.50.20"]
+    assert r.get("192.168.50.20").mac == "52:54:00:aa:bb:20" and r.get("192.168.50.20").name == "Lab Cam"
+    assert r.viewers == {"192.168.50.5"} and r.mac_of("192.168.50.20") == "52:54:00:aa:bb:20"
+
+
+def test_registry_from_env_rejects_a_bad_camera_entry(monkeypatch):
+    import pytest
+    from gateway.registry import registry_from_env
+    monkeypatch.setenv("TANOD_CAMERAS", "missing fields")
+    with pytest.raises(ValueError):
+        registry_from_env()
