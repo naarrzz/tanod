@@ -33,7 +33,7 @@ from .decision import Action, DecisionEngine, SuricataAlert
 from .enforce import Enforcer
 from .features import WINDOW_SECONDS, Packet, device_window_features, window_start
 from .model import ModelBank
-from .registry import Registry, demo_registry
+from .registry import Registry, registry_from_env
 from .spoof import BindingCheck, Observation
 from .suricata import parse_eve_line
 
@@ -127,7 +127,7 @@ def load_bank(reg: Registry, models_dir: str | None) -> tuple[ModelBank, dict]:
 
 def make_pipeline(models_dir: str | None = None, db_path: str | None = None, dry_run: bool | None = None,
                   iface: str = "wlan0", on_action=None) -> GatewayPipeline:
-    reg = demo_registry()
+    reg = registry_from_env()
     bank, baselines = load_bank(reg, models_dir)
     if dry_run is None:
         dry_run = os.environ.get("TANOD_DRY_RUN", "1") != "0"

@@ -72,9 +72,10 @@ sudo TANOD_DRY_RUN=0 python3 -m gateway.run --iface wlan0 --eve /var/log/suricat
 
 Leave `TANOD_DRY_RUN` unset to rehearse: it prints the exact block commands
 instead of running them. `--pcap capture.pcap` replays a saved capture instead
-of sniffing live (needs `scapy`, commented in requirements). The exact Kali
-commands for each attack, the lab topology, and what to show the panel are in
-[docs/attack-playbook.md](docs/attack-playbook.md).
+of sniffing live (needs `scapy`, commented in requirements). To build the virtual lab (Kali + a TANOD gateway VM + a camera stand-in) that
+runs these attacks before the Pi is ready, see
+[docs/lab-setup.md](docs/lab-setup.md). The exact Kali commands for each attack
+and what to show the panel are in [docs/attack-playbook.md](docs/attack-playbook.md).
 
 ## Setup (laptop)
 

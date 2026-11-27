@@ -10,6 +10,7 @@ school's wired IP CCTV that is connected through the gateway's Ethernet port.
 from __future__ import annotations
 
 import ipaddress
+import os
 from dataclasses import dataclass
 
 
@@ -84,4 +85,41 @@ def demo_registry() -> Registry:
             Device("Wired CCTV", "aa:bb:cc:00:00:21", "192.168.50.21", "camera", "wired"),
         ],
         viewers={"10.10.0.7", "192.168.50.5"},
+    )
+
+
+def registry_from_env() -> Registry:
+    """Build the registry from environment variables so the VM lab or the Pi can
+    match their real addresses without editing code. Anything not set falls back
+    to demo_registry's values. gateway/run.py uses this.
+
+      TANOD_LAN          192.168.50.0/24
+      TANOD_GATEWAY_IP   192.168.50.1
+      TANOD_GATEWAY_MAC  dc:a6:32:00:00:01   (the gateway's own MAC on the LAN)
+      TANOD_VIEWERS      10.10.0.7,192.168.50.5   (comma-separated approved viewers)
+      TANOD_CAMERAS      one camera per ';', fields split by '|':  name|mac|ip[|wifi|wired]
+                         e.g. "Wi-Fi Camera|52:54:00:aa:bb:20|192.168.50.20|wifi"
+    """
+    base = demo_registry()
+    cams_env = os.environ.get("TANOD_CAMERAS", "").strip()
+    if cams_env:
+        devices = []
+        for part in cams_env.split(";"):
+            part = part.strip()
+            if not part:
+                continue
+            f = [x.strip() for x in part.split("|")]
+            if len(f) < 3:
+                raise ValueError(f"TANOD_CAMERAS entry needs name|mac|ip: {part!r}")
+            devices.append(Device(f[0], f[1], f[2], "camera", f[3] if len(f) > 3 else "wifi"))
+    else:
+        devices = list(base.devices.values())
+    viewers_env = os.environ.get("TANOD_VIEWERS")
+    viewers = set(v.strip() for v in viewers_env.split(",") if v.strip()) if viewers_env else set(base.viewers)
+    return Registry(
+        devices,
+        lan_cidr=os.environ.get("TANOD_LAN", str(base.lan)),
+        gateway_ip=os.environ.get("TANOD_GATEWAY_IP", base.gateway_ip),
+        gateway_mac=os.environ.get("TANOD_GATEWAY_MAC", base.gateway_mac),
+        viewers=viewers,
     )
